@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASCII Cipher Vault</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<!-- ╔══════════════════ AUTH VIEW ══════════════════╗ -->
+<section id="view-auth" class="view view-center">
+  <div class="auth-shell">
+    <div class="brand brand-lg">
+      <div class="logo">AC</div>
+      <h1>ASCII Cipher</h1>
+      <p class="muted">Encrypted messaging with a personal key vault.</p>
+    </div>
+
+    <div class="card auth-card">
+      <div class="tabs auth-tabs">
+        <button class="tab active" data-auth-tab="login" type="button">Sign in</button>
+        <button class="tab" data-auth-tab="register" type="button">Create account</button>
+      </div>
+
+      <form id="auth-form" class="form" novalidate>
+        <label class="field">
+          <span>Email</span>
+          <input id="auth-email" type="email" autocomplete="username" required spellcheck="false">
+        </label>
+
+        <label class="field">
+          <span>Master password</span>
+          <div class="pw-row">
+            <input id="auth-password" type="password" autocomplete="current-password" required minlength="8">
+            <button class="icon-btn" id="auth-toggle" type="button" title="Show / hide">show</button>
+          </div>
+        </label>
+
+        <div id="auth-strength" class="strength hidden">
+          <div class="strength-track"><div class="strength-fill" id="auth-strength-fill"></div></div>
+          <div class="strength-text" id="auth-strength-text">—</div>
+        </div>
+
+        <label class="field hidden" id="auth-confirm-field">
+          <span>Confirm password</span>
+          <input id="auth-confirm" type="password" autocomplete="new-password">
+        </label>
+
+        <label class="field hidden" id="auth-token-field">
+          <span>Registration token <span class="hint">(if your server requires one)</span></span>
+          <input id="auth-token" type="text" autocomplete="off" spellcheck="false">
+        </label>
+
+        <p id="auth-error" class="form-error hidden"></p>
+
+        <p class="form-warning" id="auth-warning">
+          Your master password is the only key to your vault. We can't reset it. Store it somewhere safe.
+        </p>
+
+        <button class="btn primary block" type="submit" id="auth-submit">Sign in</button>
+      </form>
+    </div>
+
+    <div class="auth-foot">
+      <a href="/standalone" class="muted">→ standalone version (no account, fully offline)</a>
+    </div>
+  </div>
+</section>
+
+<!-- ╔══════════════════ UNLOCK VIEW ══════════════════╗ -->
+<section id="view-unlock" class="view view-center hidden">
+  <div class="auth-shell">
+    <div class="brand brand-lg">
+      <div class="logo">AC</div>
+      <h1>Welcome back</h1>
+      <p class="muted" id="unlock-email">—</p>
+    </div>
+
+    <div class="card auth-card">
+      <form id="unlock-form" class="form">
+        <label class="field">
+          <span>Master password</span>
+          <div class="pw-row">
+            <input id="unlock-password" type="password" autocomplete="current-password" required>
+            <button class="icon-btn" id="unlock-toggle" type="button" title="Show / hide">show</button>
+          </div>
+        </label>
+        <p id="unlock-error" class="form-error hidden"></p>
+        <button class="btn primary block" type="submit" id="unlock-submit">Unlock vault</button>
+        <button class="btn ghost block" type="button" id="unlock-logout">Sign out instead</button>
+      </form>
+    </div>
+  </div>
+</section>
+
+<!-- ╔══════════════════ APP VIEW ══════════════════╗ -->
+<section id="view-app" class="view hidden">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">AC</div>
+      <div>
+        <h1>ASCII Cipher</h1>
+        <span class="muted small" id="user-email">—</span>
+      </div>
+    </div>
+
+    <nav class="tabs main-tabs" id="main-tabs">
+      <button class="tab active" data-route="cipher" type="button">Cipher</button>
+      <button class="tab" data-route="vault" type="button">Vault <span class="count" id="vault-count">0</span></button>
+      <button class="tab" data-route="history" type="button">History</button>
+      <button class="tab" data-route="settings" type="button">Settings</button>
+    </nav>
+
+    <div class="topbar-end">
+      <button class="icon-btn" id="lock-btn" title="Lock vault (keeps you signed in)">lock</button>
+      <button class="icon-btn" id="logout-btn" title="Sign out">logout</button>
+    </div>
+  </header>
+
+  <!-- ─── CIPHER TAB ─── -->
+  <main id="tab-cipher" class="tab-pane active">
+
+    <section class="card">
+      <div class="card-label">
+        <span>Cipher key</span>
+        <span class="hint">Used to derive the message encryption key</span>
+      </div>
+
+      <div class="key-row">
+        <select id="key-source" class="select" title="Pick a saved key or use a custom one">
+          <option value="custom">Custom key…</option>
+        </select>
+        <input id="key" type="password" placeholder="Enter passphrase…" autocomplete="off" spellcheck="false">
+        <button class="icon-btn" id="gen-key" type="button" title="Generate strong passphrase">gen</button>
+        <button class="icon-btn" id="show-key" type="button" title="Show / hide">show</button>
+        <button class="icon-btn" id="copy-key" type="button" title="Copy key">copy</button>
+        <button class="icon-btn" id="save-key" type="button" title="Save this key to your vault">save ★</button>
+      </div>
+
+      <div class="strength">
+        <div class="strength-track"><div class="strength-fill" id="strength-fill"></div></div>
+        <div class="strength-text" id="strength-text">—</div>
+      </div>
+    </section>
+
+    <div class="mode-row">
+      <button class="mode-btn encrypt active" data-mode="encrypt" type="button"><span class="dot"></span> Encrypt</button>
+      <button class="mode-btn decrypt" data-mode="decrypt" type="button"><span class="dot"></span> Decrypt</button>
+    </div>
+
+    <section class="card">
+      <div class="card-label">
+        <span>Input <span id="input-tag" class="tag hidden">cipher detected</span></span>
+        <span class="hint" id="input-stats">0 chars</span>
+      </div>
+      <textarea id="input" class="io" placeholder="Type, paste, or drop a text file…" spellcheck="false"></textarea>
+
+      <div class="actions">
+        <button class="btn primary" id="run" type="button">
+          <span id="run-label">Encrypt</span>
+          <span class="kbd">Ctrl+Enter</span>
+        </button>
+        <button class="btn" id="swap" type="button">Swap</button>
+        <button class="btn" id="paste" type="button">Paste</button>
+        <button class="btn" id="clear" type="button">Clear</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-label">
+        <span>Output</span>
+        <span class="hint" id="output-stats">empty</span>
+      </div>
+      <textarea id="output" class="io read-only" placeholder="Result will appear here." spellcheck="false" readonly></textarea>
+      <div class="actions">
+        <button class="btn success" id="copy-out" type="button">Copy output</button>
+        <button class="btn" id="download-out" type="button">Download</button>
+        <div class="spacer"></div>
+        <div class="out-meta" id="out-meta"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ─── VAULT TAB ─── -->
+  <main id="tab-vault" class="tab-pane hidden">
+    <section class="card">
+      <div class="vault-toolbar">
+        <input id="vault-search" class="search" type="search" placeholder="Search labels, tags, notes…" autocomplete="off">
+        <select id="vault-sort" class="select select-sm">
+          <option value="updated">Recently updated</option>
+          <option value="created">Recently added</option>
+          <option value="label">Label A→Z</option>
+        </select>
+        <button class="btn primary" id="vault-add" type="button">+ New key</button>
+      </div>
+      <div id="vault-list" class="vault-list"></div>
+      <div id="vault-empty" class="empty hidden">
+        <p>No saved keys yet.</p>
+        <p class="muted">Use the cipher tab and click <b>save ★</b>, or <b>+ New key</b> to add one manually.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- ─── HISTORY TAB ─── -->
+  <main id="tab-history" class="tab-pane hidden">
+    <section class="card">
+      <div class="vault-toolbar">
+        <div class="hint">Last 200 operations are kept (encrypted on the server).</div>
+        <div class="spacer"></div>
+        <button class="btn ghost" id="history-refresh" type="button">Refresh</button>
+        <button class="btn danger-soft" id="history-clear" type="button">Clear all</button>
+      </div>
+      <div id="history-list" class="history-list"></div>
+      <div id="history-empty" class="empty hidden">
+        <p>No history yet.</p>
+        <p class="muted">Encrypt or decrypt something — a snippet preview will appear here.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- ─── SETTINGS TAB ─── -->
+  <main id="tab-settings" class="tab-pane hidden">
+    <section class="card">
+      <h3 class="section-h">Account</h3>
+      <div class="kv"><span>Email</span><b id="set-email">—</b></div>
+      <div class="kv"><span>Created</span><b id="set-created">—</b></div>
+      <div class="kv"><span>Last login</span><b id="set-last">—</b></div>
+    </section>
+
+    <section class="card">
+      <h3 class="section-h">Active sessions</h3>
+      <p class="muted small">Sign-in tokens currently issued for your account. Revoke any you don't recognise.</p>
+      <div id="sessions-list" class="sessions-list"></div>
+    </section>
+
+    <section class="card">
+      <h3 class="section-h">Change master password</h3>
+      <p class="muted small">All vault items are re-encrypted with the new key in a single transaction. Other sessions will be signed out.</p>
+      <form id="change-pw-form" class="form-inline">
+        <input id="cp-current" type="password" placeholder="Current password" autocomplete="current-password" required>
+        <input id="cp-new" type="password" placeholder="New password (min 8)" autocomplete="new-password" required minlength="8">
+        <input id="cp-confirm" type="password" placeholder="Confirm new password" autocomplete="new-password" required>
+        <button class="btn primary" type="submit">Change password</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h3 class="section-h">Backup</h3>
+      <p class="muted small">Export your vault as an encrypted JSON file. The export contains only ciphertext and is safe to store anywhere — but you'll still need your master password to use it.</p>
+      <div class="actions">
+        <button class="btn" id="export-vault" type="button">Export vault</button>
+        <button class="btn" id="import-vault" type="button">Import…</button>
+        <input id="import-file" type="file" accept="application/json" hidden>
+      </div>
+    </section>
+
+    <section class="card danger-zone">
+      <h3 class="section-h">Danger zone</h3>
+      <p class="muted small">Permanently delete your account and every vault item. This can't be undone.</p>
+      <form id="delete-account-form" class="form-inline">
+        <input id="da-password" type="password" placeholder="Confirm with master password" autocomplete="current-password" required>
+        <button class="btn danger" type="submit">Delete account</button>
+      </form>
+    </section>
+  </main>
+</section>
+
+<!-- ╔══════════════════ MODALS ══════════════════╗ -->
+<div class="modal hidden" id="vault-modal">
+  <div class="modal-card">
+    <header class="modal-head">
+      <h3 id="vm-title">New vault entry</h3>
+      <button class="icon-btn" id="vm-close" type="button">close</button>
+    </header>
+    <form id="vm-form" class="form">
+      <label class="field">
+        <span>Label</span>
+        <input id="vm-label" type="text" required maxlength="120" placeholder="e.g. Project X notes">
+      </label>
+      <label class="field">
+        <span>Key</span>
+        <div class="pw-row">
+          <input id="vm-key" type="password" required>
+          <button class="icon-btn" id="vm-key-gen" type="button">gen</button>
+          <button class="icon-btn" id="vm-key-show" type="button">show</button>
+        </div>
+      </label>
+      <label class="field">
+        <span>Tags <span class="hint">comma-separated</span></span>
+        <input id="vm-tags" type="text" placeholder="work, personal, project-x" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>Notes</span>
+        <textarea id="vm-notes" rows="3" placeholder="Optional context — what is this key for?"></textarea>
+      </label>
+      <label class="check">
+        <input id="vm-pinned" type="checkbox">
+        <span>Pin to top of vault</span>
+      </label>
+      <p id="vm-error" class="form-error hidden"></p>
+      <div class="modal-foot">
+        <button class="btn ghost" id="vm-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="vm-save" type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal hidden" id="confirm-modal">
+  <div class="modal-card sm">
+    <header class="modal-head"><h3 id="cm-title">Are you sure?</h3></header>
+    <p id="cm-body" class="modal-body">—</p>
+    <div class="modal-foot">
+      <button class="btn ghost" id="cm-cancel" type="button">Cancel</button>
+      <button class="btn danger" id="cm-ok" type="button">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<div class="overlay hidden" id="busy">
+  <div class="spinner"></div>
+  <p id="busy-text" class="muted">Working…</p>
+</div>
+
+<script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
