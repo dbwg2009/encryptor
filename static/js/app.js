@@ -81,6 +81,11 @@ const state = {
   vaultKey: null,       // Uint8Array(32) — never persisted
   vaultItems: [],       // decrypted: [{id, label, key, notes, tags, pinned, createdAt, updatedAt}]
   history: [],          // decrypted: [{id, op, preview, createdAt}]
+  users: [],            // public directory: [{id, email}]
+  threads: [],          // [{peerId, peerEmail, unread, lastAt}]
+  messages: [],         // raw messages for active thread
+  activeThread: null,   // {peerId, peerEmail}
+  threadKeyCache: {},   // peerId → vault item used last to decrypt
   route: "cipher",
   cipherMode: "encrypt",
   showKey: false,
@@ -101,6 +106,7 @@ function setRoute(r) {
   if (r === "vault")    renderVault();
   if (r === "history")  loadHistory();
   if (r === "settings") loadSettings();
+  if (r === "messages") loadThreads();
   location.hash = r;
 }
 
@@ -241,6 +247,11 @@ function hardLock() {
   state.vaultKey = null;
   state.vaultItems = [];
   state.history = [];
+  state.users = [];
+  state.threads = [];
+  state.messages = [];
+  state.activeThread = null;
+  state.threadKeyCache = {};
   for (const id of ["auth-email","auth-password","auth-confirm","auth-token","unlock-password"]) {
     const el = $(id); if (el) el.value = "";
   }
@@ -852,7 +863,325 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ─── Boot ──────────────────────────────────────────────────────
+// ─── Messages tab ──────────────────────────────────────────────
+const msgEls = {
+  threads: $("msg-threads"),
+  threadsEmpty: $("msg-threads-empty"),
+  header: $("msg-header"),
+  list: $("msg-list"),
+  compose: $("msg-compose"),
+  body: $("msg-body"),
+  key: $("msg-key"),
+  keySource: $("msg-key-source"),
+  keyShow: $("msg-key-show"),
+  hint: $("msg-hint"),
+  unreadBadge: $("msg-unread"),
+  newBtn: $("msg-new"),
+  modal: $("new-msg-modal"),
+  recipient: $("nm-recipient"),
+};
+
+async function loadUsers() {
+  state.users = await api.get("/api/users");
+}
+
+async function loadThreads() {
+  if (!state.vaultKey) return;
+  try {
+    [state.users, state.threads] = await Promise.all([
+      api.get("/api/users"),
+      api.get("/api/messages/threads"),
+    ]);
+    renderThreads();
+    updateUnreadBadge();
+  } catch (e) { toast(e.message || "Failed to load threads", "error"); }
+}
+
+function renderThreads() {
+  const empty = state.threads.length === 0;
+  msgEls.threadsEmpty.classList.toggle("hidden", !empty);
+  msgEls.threads.innerHTML = state.threads.map(t => `
+    <div class="msg-thread ${state.activeThread?.peerId === t.peerId ? 'active' : ''}" data-peer="${t.peerId}">
+      <div class="t-row">
+        <span class="t-email">${escapeHtml(t.peerEmail)}</span>
+        ${t.unread > 0 ? `<span class="t-unread">${t.unread}</span>` : ""}
+      </div>
+      <div class="t-row">
+        <span class="t-time">${t.lastAt ? fmtTime(t.lastAt) : "—"}</span>
+      </div>
+    </div>
+  `).join("");
+  for (const el of msgEls.threads.querySelectorAll(".msg-thread")) {
+    el.addEventListener("click", () => openThread(Number(el.dataset.peer)));
+  }
+}
+
+async function openThread(peerId) {
+  const peer = state.users.find(u => u.id === peerId)
+            || state.threads.find(t => t.peerId === peerId);
+  if (!peer) return;
+  state.activeThread = { peerId, peerEmail: peer.email || peer.peerEmail };
+  msgEls.header.innerHTML = `
+    <div>
+      <div class="h-email">${escapeHtml(state.activeThread.peerEmail)}</div>
+      <div class="h-meta">end-to-end · key never leaves your browser</div>
+    </div>
+    <button class="icon-btn" id="msg-refresh" type="button">refresh</button>
+  `;
+  $("msg-refresh").addEventListener("click", () => loadMessages(peerId));
+  msgEls.compose.classList.remove("hidden");
+  refreshMsgKeySource();
+  await loadMessages(peerId);
+  setTimeout(() => msgEls.body.focus(), 50);
+}
+
+async function loadMessages(peerId) {
+  try {
+    state.messages = await api.get(`/api/messages?peer=${peerId}&limit=200`);
+    await renderMessages();
+    for (const m of state.messages) {
+      if (!m.fromMe && !m.readAt) {
+        try { await api.post(`/api/messages/${m.id}/read`); } catch {}
+      }
+    }
+    state.threads = await api.get("/api/messages/threads");
+    renderThreads();
+    updateUnreadBadge();
+  } catch (e) {
+    msgEls.list.innerHTML = `<p class="form-error" style="margin:20px;">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function tryDecrypt(ciphertext, peerId) {
+  // 1. Try cached key first (fast path).
+  const cached = state.threadKeyCache[peerId];
+  if (cached) {
+    const r = await decryptToken(ciphertext, cached.key);
+    if (r.ok) return { ok: true, text: r.text, keyLabel: cached.label };
+  }
+  // 2. Try every vault key.
+  for (const k of state.vaultItems) {
+    if (cached && k.id === cached.id) continue;
+    const r = await decryptToken(ciphertext, k.key);
+    if (r.ok) {
+      state.threadKeyCache[peerId] = k;
+      return { ok: true, text: r.text, keyLabel: k.label };
+    }
+  }
+  // 3. Try the key currently in the compose box.
+  const liveKey = msgEls.key.value;
+  if (liveKey) {
+    const r = await decryptToken(ciphertext, liveKey);
+    if (r.ok) return { ok: true, text: r.text, keyLabel: "(custom)" };
+  }
+  return { ok: false };
+}
+
+async function renderMessages() {
+  if (state.messages.length === 0) {
+    msgEls.list.innerHTML = `<div class="empty" style="padding:40px 20px;"><p>No messages yet</p><p class="muted small">Send the first one ↓</p></div>`;
+    return;
+  }
+  const ordered = state.messages.slice().reverse();   // oldest → newest
+  const decrypted = [];
+  for (const m of ordered) {
+    const r = await tryDecrypt(m.ciphertext, state.activeThread.peerId);
+    decrypted.push({ ...m, decrypted: r });
+  }
+  msgEls.list.innerHTML = decrypted.map(m => {
+    const side = m.fromMe ? "from-me" : "from-them";
+    if (m.decrypted.ok) {
+      return `
+        <div class="msg-bubble ${side}" data-id="${m.id}">
+          ${m.hint ? `<div class="b-hint">hint: ${escapeHtml(m.hint)}</div>` : ""}
+          <div>${escapeHtml(m.decrypted.text)}</div>
+          <div class="b-meta">
+            <span>★ ${escapeHtml(m.decrypted.keyLabel || "key")}</span>
+            <span>·</span>
+            <span>${fmtTime(m.createdAt)}</span>
+          </div>
+          <div class="b-actions"><button data-act="del">delete</button></div>
+        </div>`;
+    }
+    return `
+      <div class="msg-bubble ${side} encrypted" data-id="${m.id}">
+        ${m.hint ? `<div class="b-hint">hint: ${escapeHtml(m.hint)}</div>` : ""}
+        <div>🔒 ${escapeHtml(m.ciphertext.slice(0, 80))}…</div>
+        <div class="b-meta">
+          <span>no matching key in vault</span>
+          <span>·</span>
+          <span>${fmtTime(m.createdAt)}</span>
+        </div>
+        <div class="b-actions"><button data-act="del">delete</button></div>
+      </div>`;
+  }).join("");
+  for (const el of msgEls.list.querySelectorAll(".msg-bubble")) {
+    el.querySelector('[data-act="del"]')?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = Number(el.dataset.id);
+      try {
+        await api.del(`/api/messages/${id}`);
+        state.messages = state.messages.filter(x => x.id !== id);
+        await renderMessages();
+      } catch (err) { toast(err.message, "error"); }
+    });
+  }
+  msgEls.list.scrollTop = msgEls.list.scrollHeight;
+}
+
+function refreshMsgKeySource() {
+  const sel = msgEls.keySource;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="custom">Custom key…</option>';
+  for (const it of state.vaultItems) {
+    const opt = document.createElement("option");
+    opt.value = String(it.id);
+    opt.textContent = (it.pinned ? "★ " : "") + it.label;
+    sel.appendChild(opt);
+  }
+  const cached = state.threadKeyCache[state.activeThread?.peerId];
+  if (cached && state.vaultItems.some(v => v.id === cached.id)) {
+    sel.value = String(cached.id);
+    msgEls.key.value = cached.key;
+  } else if (cur && (cur === "custom" || state.vaultItems.some(v => String(v.id) === cur))) {
+    sel.value = cur;
+  } else {
+    sel.value = "custom";
+  }
+}
+
+msgEls.keySource.addEventListener("change", () => {
+  const v = msgEls.keySource.value;
+  if (v === "custom") {
+    msgEls.key.value = "";
+    msgEls.key.placeholder = "Encryption key (preshared)";
+  } else {
+    const it = state.vaultItems.find(x => String(x.id) === v);
+    if (it) {
+      msgEls.key.value = it.key;
+      // If we change keys, drop the cache for this peer so re-decrypt picks up.
+      if (state.activeThread) state.threadKeyCache[state.activeThread.peerId] = it;
+      renderMessages();
+    }
+  }
+});
+msgEls.keyShow.addEventListener("click", () => {
+  msgEls.key.type = msgEls.key.type === "password" ? "text" : "password";
+});
+
+msgEls.compose.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!state.activeThread) return;
+  const body = msgEls.body.value.trim();
+  const key = msgEls.key.value;
+  const hint = msgEls.hint.value.trim();
+  if (!body) return;
+  if (!key) { toast("Pick a vault key or type one", "error"); msgEls.key.focus(); return; }
+  try {
+    const ciphertext = await encryptText(body, key);
+    await api.post("/api/messages", {
+      recipientId: state.activeThread.peerId,
+      ciphertext,
+      hint: hint || undefined,
+    });
+    msgEls.body.value = "";
+    const sel = msgEls.keySource.value;
+    if (sel !== "custom") {
+      const it = state.vaultItems.find(x => String(x.id) === sel);
+      if (it) state.threadKeyCache[state.activeThread.peerId] = it;
+    }
+    await loadMessages(state.activeThread.peerId);
+  } catch (err) { toast(err.message || "Send failed", "error"); }
+});
+
+// Send on Ctrl+Enter inside the body textarea.
+msgEls.body.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    e.preventDefault();
+    msgEls.compose.requestSubmit();
+  }
+});
+
+// ── New message modal ──
+msgEls.newBtn.addEventListener("click", async () => {
+  try { await loadUsers(); } catch {}
+  if (!state.users.length) { toast("No other users registered yet", "info"); return; }
+  msgEls.recipient.innerHTML = state.users.map(u =>
+    `<option value="${u.id}">${escapeHtml(u.email)}</option>`
+  ).join("");
+  msgEls.modal.classList.remove("hidden");
+});
+$("nm-close").addEventListener("click", () => msgEls.modal.classList.add("hidden"));
+$("nm-cancel").addEventListener("click", () => msgEls.modal.classList.add("hidden"));
+msgEls.modal.addEventListener("click", (e) => { if (e.target === msgEls.modal) msgEls.modal.classList.add("hidden"); });
+$("nm-open").addEventListener("click", async () => {
+  const id = Number(msgEls.recipient.value);
+  msgEls.modal.classList.add("hidden");
+  if (!state.threads.find(t => t.peerId === id)) {
+    const peer = state.users.find(u => u.id === id);
+    if (peer) state.threads.unshift({ peerId: id, peerEmail: peer.email, unread: 0, lastAt: null });
+  }
+  await openThread(id);
+});
+
+// ── Unread badge polling ──
+async function updateUnreadBadge() {
+  try {
+    const r = await api.get("/api/messages/unread-count");
+    const badge = msgEls.unreadBadge;
+    if (r.unread > 0) {
+      badge.textContent = r.unread > 99 ? "99+" : r.unread;
+      badge.style.display = "";
+    } else {
+      badge.style.display = "none";
+    }
+  } catch {}
+}
+
+let _msgPoll = null;
+function startMessagePolling() {
+  if (_msgPoll) return;
+  _msgPoll = setInterval(() => {
+    if (!state.user || !state.vaultKey) return;
+    updateUnreadBadge();
+    if (state.route === "messages" && state.activeThread) {
+      loadMessages(state.activeThread.peerId).catch(() => {});
+    } else if (state.route === "messages") {
+      loadThreads().catch(() => {});
+    }
+  }, 15000);
+}
+function stopMessagePolling() {
+  if (_msgPoll) { clearInterval(_msgPoll); _msgPoll = null; }
+}
+
+function ensureSecureContext() {
+  if (window.isSecureContext && window.crypto?.subtle) return true;
+  // Browsers refuse to expose Web Crypto over plain HTTP (except on localhost).
+  // Replace every form with a clear message so the user knows what to do.
+  const banner = `
+    <div class="card" style="max-width:560px;margin:60px auto;text-align:center;">
+      <div class="brand brand-lg"><div class="logo">!</div><h1>HTTPS required</h1></div>
+      <p style="color:var(--fg);margin-bottom:10px;">
+        Your browser blocks the cryptography this app depends on
+        (<code>crypto.subtle</code>) over plain HTTP.
+      </p>
+      <p class="muted small" style="margin-bottom:14px;">
+        Open this site over <b>https://</b> instead. In Nginx Proxy Manager:
+        edit your proxy host → <b>SSL</b> tab → request a Let's Encrypt cert →
+        enable <b>Force SSL</b>. Then reload.
+      </p>
+      <p class="muted small">
+        Current origin: <code>${escapeHtml(location.origin)}</code><br>
+        Secure context: <code>${window.isSecureContext}</code>
+      </p>
+    </div>`;
+  document.body.innerHTML = banner;
+  return false;
+}
+
 async function boot() {
+  if (!ensureSecureContext()) return;
   setAuthMode("login");
   try {
     state.user = await api.get("/api/auth/me");

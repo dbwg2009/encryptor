@@ -108,6 +108,7 @@
     <nav class="tabs main-tabs" id="main-tabs">
       <button class="tab active" data-route="cipher" type="button">Cipher</button>
       <button class="tab" data-route="vault" type="button">Vault <span class="count" id="vault-count">0</span></button>
+      <button class="tab" data-route="messages" type="button">Messages <span class="count" id="msg-unread" style="display:none">0</span></button>
       <button class="tab" data-route="history" type="button">History</button>
       <button class="tab" data-route="settings" type="button">Settings</button>
     </nav>
@@ -200,6 +201,48 @@
         <p class="muted">Use the cipher tab and click <b>save ★</b>, or <b>+ New key</b> to add one manually.</p>
       </div>
     </section>
+  </main>
+
+  <!-- ─── MESSAGES TAB ─── -->
+  <main id="tab-messages" class="tab-pane hidden">
+    <div class="msg-layout">
+      <aside class="msg-sidebar">
+        <div class="msg-sidebar-head">
+          <h3 class="section-h" style="margin:0;">Conversations</h3>
+          <button class="btn primary" id="msg-new" type="button">+ New</button>
+        </div>
+        <div id="msg-threads" class="msg-threads"></div>
+        <div id="msg-threads-empty" class="empty hidden" style="padding:20px 8px;">
+          <p>No conversations yet</p>
+          <p class="muted small">Click <b>+ New</b> to message another user.</p>
+        </div>
+      </aside>
+
+      <section class="msg-main">
+        <header class="msg-header" id="msg-header">
+          <div class="muted small">Pick a conversation or start a new one.</div>
+        </header>
+        <div id="msg-list" class="msg-list">
+          <div class="empty" style="padding:60px 20px;">
+            <p>No conversation selected</p>
+          </div>
+        </div>
+        <form id="msg-compose" class="msg-compose hidden">
+          <div class="msg-compose-keyrow">
+            <select id="msg-key-source" class="select select-sm">
+              <option value="custom">Custom key…</option>
+            </select>
+            <input id="msg-key" type="password" placeholder="Encryption key (preshared)" autocomplete="off" spellcheck="false">
+            <button class="icon-btn" id="msg-key-show" type="button">show</button>
+          </div>
+          <div class="msg-compose-row">
+            <textarea id="msg-body" placeholder="Type a message…  (Ctrl+Enter to send)" rows="2"></textarea>
+            <button class="btn primary" type="submit">Send</button>
+          </div>
+          <input id="msg-hint" type="text" class="msg-hint-input" placeholder="Optional unencrypted hint about which key (e.g. 'project-x')" maxlength="120" autocomplete="off">
+        </form>
+      </section>
+    </div>
   </main>
 
   <!-- ─── HISTORY TAB ─── -->
@@ -304,6 +347,30 @@
         <button class="btn primary" id="vm-save" type="submit">Save</button>
       </div>
     </form>
+  </div>
+</div>
+
+<div class="modal hidden" id="new-msg-modal">
+  <div class="modal-card">
+    <header class="modal-head">
+      <h3>Start conversation</h3>
+      <button class="icon-btn" id="nm-close" type="button">close</button>
+    </header>
+    <div class="form">
+      <label class="field">
+        <span>Recipient</span>
+        <select id="nm-recipient" class="select"></select>
+      </label>
+      <p class="muted small">
+        Messages are encrypted in your browser with a preshared key before they
+        reach the server. The recipient needs the same key (in their vault, or
+        entered manually) to read them.
+      </p>
+      <div class="modal-foot">
+        <button class="btn ghost" id="nm-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="nm-open" type="button">Open conversation</button>
+      </div>
+    </div>
   </div>
 </div>
 
