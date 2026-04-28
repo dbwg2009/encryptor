@@ -9,12 +9,22 @@ services:
       CIPHER_REGISTRATION_TOKEN: ${CIPHER_REGISTRATION_TOKEN:-}
       CIPHER_TRUST_PROXY: "1"
     volumes:
-      - ./data:/data
+      # Named volume — Docker manages ownership so the container's non-root
+      # user can always write. Inspect on the host with:
+      #   docker volume inspect cipher-vault_cipher_data
+      - cipher_data:/data
+      # If you'd rather have a host directory you can rsync directly, swap
+      # the line above for the bind mount below AND run, on the host:
+      #   mkdir -p ./data && sudo chown -R 1000:1000 ./data
+      # - ./data:/data
     ports:
       - "127.0.0.1:8765:8000"
     networks:
       - default
       - npm
+
+volumes:
+  cipher_data:
 
 networks:
   npm:

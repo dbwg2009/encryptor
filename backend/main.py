@@ -84,6 +84,21 @@ CREATE TABLE IF NOT EXISTS history (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_history_user_time ON history(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ciphertext TEXT NOT NULL,
+  hint TEXT,
+  created_at INTEGER NOT NULL,
+  read_at INTEGER,
+  deleted_by_sender INTEGER NOT NULL DEFAULT 0,
+  deleted_by_recipient INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_sender    ON messages(sender_id,    created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_pair      ON messages(sender_id, recipient_id, created_at DESC);
 """
 
 
@@ -241,6 +256,12 @@ class DeleteAccountIn(BaseModel):
     authHash: str = Field(pattern="^[0-9a-fA-F]{64}$")
 
 
+class MessageIn(BaseModel):
+    recipientId: int
+    ciphertext: str = Field(min_length=1, max_length=131072)
+    hint: Optional[str] = Field(default=None, max_length=120)
+
+
 app = FastAPI(title="ASCII Cipher Vault", openapi_url=None, docs_url=None, redoc_url=None)
 
 
@@ -262,7 +283,7 @@ async def security_headers(request: Request, call_next):
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self'; "
-        "style-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
         "frame-ancestors 'none'; "
@@ -513,6 +534,125 @@ def sessions_revoke(sess_id: str, user = Depends(auth_dep)):
     with db() as conn:
         conn.execute("DELETE FROM sessions WHERE id = ? AND user_id = ?", (sess_id, user["id"]))
     return Response(status_code=204)
+
+
+@app.get("/api/users")
+def users_list(user = Depends(require_user)):
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, email FROM users WHERE id != ? ORDER BY email",
+            (user["id"],)
+        ).fetchall()
+    return [{"id": r["id"], "email": r["email"]} for r in rows]
+
+
+@app.get("/api/messages/threads")
+def message_threads(user = Depends(require_user)):
+    uid = user["id"]
+    with db() as conn:
+        rows = conn.execute("""
+            WITH peers AS (
+              SELECT recipient_id AS peer_id FROM messages
+                WHERE sender_id = ? AND deleted_by_sender = 0
+              UNION
+              SELECT sender_id AS peer_id FROM messages
+                WHERE recipient_id = ? AND deleted_by_recipient = 0
+            )
+            SELECT p.peer_id, u.email,
+              (SELECT COUNT(*) FROM messages
+                 WHERE recipient_id = ? AND sender_id = p.peer_id
+                   AND read_at IS NULL AND deleted_by_recipient = 0) AS unread,
+              (SELECT MAX(created_at) FROM messages
+                 WHERE ((sender_id = ? AND recipient_id = p.peer_id AND deleted_by_sender = 0)
+                     OR (sender_id = p.peer_id AND recipient_id = ? AND deleted_by_recipient = 0))) AS last_at
+              FROM peers p JOIN users u ON u.id = p.peer_id
+             ORDER BY last_at DESC
+        """, (uid, uid, uid, uid, uid)).fetchall()
+    return [{"peerId": r["peer_id"], "peerEmail": r["email"],
+             "unread": r["unread"], "lastAt": r["last_at"]} for r in rows]
+
+
+@app.get("/api/messages")
+def messages_list(peer: int, limit: int = 200, user = Depends(require_user)):
+    limit = max(1, min(limit, 500))
+    uid = user["id"]
+    with db() as conn:
+        rows = conn.execute("""
+            SELECT id, sender_id, recipient_id, ciphertext, hint, created_at, read_at
+              FROM messages
+             WHERE ((sender_id = ? AND recipient_id = ? AND deleted_by_sender = 0)
+                 OR (sender_id = ? AND recipient_id = ? AND deleted_by_recipient = 0))
+             ORDER BY created_at DESC
+             LIMIT ?
+        """, (uid, peer, peer, uid, limit)).fetchall()
+    return [{
+        "id": r["id"],
+        "fromMe": r["sender_id"] == uid,
+        "senderId": r["sender_id"],
+        "recipientId": r["recipient_id"],
+        "ciphertext": r["ciphertext"],
+        "hint": r["hint"],
+        "createdAt": r["created_at"],
+        "readAt": r["read_at"],
+    } for r in rows]
+
+
+@app.post("/api/messages", status_code=201)
+def message_send(body: MessageIn, user = Depends(auth_dep)):
+    if body.recipientId == user["id"]:
+        raise HTTPException(400, "Cannot message yourself")
+    with db() as conn:
+        peer = conn.execute("SELECT id FROM users WHERE id = ?", (body.recipientId,)).fetchone()
+        if not peer:
+            raise HTTPException(404, "Recipient not found")
+        now = int(time.time())
+        cur = conn.execute(
+            "INSERT INTO messages (sender_id, recipient_id, ciphertext, hint, created_at) VALUES (?,?,?,?,?)",
+            (user["id"], body.recipientId, body.ciphertext, body.hint, now)
+        )
+    return {"id": cur.lastrowid, "createdAt": now}
+
+
+@app.post("/api/messages/{msg_id}/read")
+def message_mark_read(msg_id: int, user = Depends(auth_dep)):
+    now = int(time.time())
+    with db() as conn:
+        conn.execute(
+            "UPDATE messages SET read_at = ? WHERE id = ? AND recipient_id = ? AND read_at IS NULL",
+            (now, msg_id, user["id"])
+        )
+    return {"ok": True}
+
+
+@app.delete("/api/messages/{msg_id}")
+def message_delete(msg_id: int, user = Depends(auth_dep)):
+    with db() as conn:
+        row = conn.execute(
+            "SELECT sender_id, recipient_id FROM messages WHERE id = ?", (msg_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Not found")
+        if row["sender_id"] == user["id"]:
+            conn.execute("UPDATE messages SET deleted_by_sender = 1 WHERE id = ?", (msg_id,))
+        elif row["recipient_id"] == user["id"]:
+            conn.execute("UPDATE messages SET deleted_by_recipient = 1 WHERE id = ?", (msg_id,))
+        else:
+            raise HTTPException(403, "Not your message")
+        conn.execute(
+            "DELETE FROM messages WHERE id = ? AND deleted_by_sender = 1 AND deleted_by_recipient = 1",
+            (msg_id,)
+        )
+    return Response(status_code=204)
+
+
+@app.get("/api/messages/unread-count")
+def unread_count(user = Depends(require_user)):
+    with db() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE recipient_id = ? AND read_at IS NULL AND deleted_by_recipient = 0",
+            (user["id"],)
+        ).fetchone()[0]
+    return {"unread": n}
 
 
 @app.get("/api/health")
