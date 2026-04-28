@@ -1,0 +1,22 @@
+services:
+  cipher:
+    build: .
+    image: ascii-cipher-vault:latest
+    container_name: cipher-vault
+    restart: unless-stopped
+    environment:
+      CIPHER_SECRET: ${CIPHER_SECRET:?run "openssl rand -hex 32" and put it in .env}
+      CIPHER_REGISTRATION_TOKEN: ${CIPHER_REGISTRATION_TOKEN:-}
+      CIPHER_TRUST_PROXY: "1"
+    volumes:
+      - ./data:/data
+    ports:
+      - "127.0.0.1:8765:8000"
+    networks:
+      - default
+      - npm
+
+networks:
+  npm:
+    external: true
+    name: ${NPM_NETWORK:-npm_default}
