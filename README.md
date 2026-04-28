@@ -56,7 +56,7 @@ cp .env.example .env
 echo "CIPHER_SECRET=$(openssl rand -hex 32)" >> .env
 
 # 2. Build and start
-docker compose up -d --build
+sudo docker compose up -d --build
 
 # 3. Open http://127.0.0.1:8765 and create your first account
 ```
@@ -71,7 +71,7 @@ can't sign up:
 
 ```bash
 echo "CIPHER_REGISTRATION_TOKEN=$(openssl rand -hex 16)" >> .env
-docker compose up -d
+sudo docker compose up -d
 ```
 
 New sign-ups must paste the token into the registration form.
