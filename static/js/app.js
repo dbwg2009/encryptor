@@ -188,6 +188,8 @@ authForm.addEventListener("submit", async (e) => {
     setView("app");
     setRoute(window.location.hash.slice(1) || "cipher");
     refreshKeySource();
+    updateUnreadBadge();
+    startMessagePolling();
     toast("Welcome", "info", "✓");
   } catch (err) {
     authError(err.message || String(err));
@@ -215,6 +217,8 @@ $("unlock-form").addEventListener("submit", async (e) => {
     setView("app");
     setRoute(window.location.hash.slice(1) || "cipher");
     refreshKeySource();
+    updateUnreadBadge();
+    startMessagePolling();
     $("unlock-password").value = "";
   } catch (err) {
     const el = $("unlock-error");
@@ -231,6 +235,7 @@ async function loadUser() {
 
 async function logout() {
   try { await api.post("/api/auth/logout"); } catch {}
+  stopMessagePolling();
   hardLock();
   setView("auth");
 }
