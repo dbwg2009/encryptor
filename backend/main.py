@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS messages (
   recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   ciphertext TEXT NOT NULL,
   hint TEXT,
+  reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
   created_at INTEGER NOT NULL,
   read_at INTEGER,
   deleted_by_sender INTEGER NOT NULL DEFAULT 0,
@@ -125,16 +126,47 @@ CREATE TABLE IF NOT EXISTS group_messages (
   sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   ciphertext TEXT NOT NULL,
   hint TEXT,
+  reply_to_id INTEGER REFERENCES group_messages(id) ON DELETE SET NULL,
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  subscription_json TEXT NOT NULL,
+  user_agent TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
 """
+
+
+def _migrate(conn):
+    """Apply additive column migrations safely."""
+    migrations = [
+        ("messages",       "reply_to_id", "INTEGER REFERENCES messages(id) ON DELETE SET NULL"),
+        ("group_messages", "reply_to_id", "INTEGER REFERENCES group_messages(id) ON DELETE SET NULL"),
+        ("push_subscriptions", None, None),  # table-level check only
+    ]
+    existing_tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    for table, col, coldef in migrations:
+        if col is None:
+            continue
+        if table not in existing_tables:
+            continue
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coldef}")
 
 
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 @contextmanager
@@ -289,6 +321,7 @@ class MessageIn(BaseModel):
     recipientId: int
     ciphertext: str = Field(min_length=1, max_length=131072)
     hint: Optional[str] = Field(default=None, max_length=120)
+    replyToId: Optional[int] = None
 
 
 class LookupIn(BaseModel):
@@ -310,6 +343,11 @@ class GroupJoinIn(BaseModel):
 class GroupMessageIn(BaseModel):
     ciphertext: str = Field(min_length=1, max_length=131072)
     hint: Optional[str] = Field(default=None, max_length=120)
+    replyToId: Optional[int] = None
+
+
+class PushSubscriptionIn(BaseModel):
+    subscription: dict
 
 
 app = FastAPI(title="ASCII Cipher Vault", openapi_url=None, docs_url=None, redoc_url=None)
@@ -652,6 +690,31 @@ def messages_list(peer: int, limit: int = 200, user = Depends(require_user)):
     } for r in rows]
 
 
+def _fire_push(recipient_ids: list, title: str, body_text: str):
+    """Fire-and-forget push notification to a list of user IDs (runs in background thread)."""
+    import json, threading
+    def _send():
+        for uid in recipient_ids:
+            try:
+                with db() as conn:
+                    subs = conn.execute(
+                        "SELECT id, subscription_json FROM push_subscriptions WHERE user_id = ?",
+                        (uid,)
+                    ).fetchall()
+                for sub in subs:
+                    try:
+                        sub_data = json.loads(sub["subscription_json"])
+                        endpoint = sub_data.get("endpoint", "")
+                        # Real Web Push would POST to endpoint with encrypted payload.
+                        # Requires VAPID keys + pywebpush library. Logged for now.
+                        print(f"[push] → {endpoint[:60]}… | {title}: {body_text[:40]}")
+                    except Exception as e:
+                        print(f"[push] error: {e}")
+            except Exception as e:
+                print(f"[push] db error: {e}")
+    threading.Thread(target=_send, daemon=True).start()
+
+
 @app.post("/api/messages", status_code=201)
 def message_send(body: MessageIn, user = Depends(auth_dep)):
     if body.recipientId == user["id"]:
@@ -662,9 +725,10 @@ def message_send(body: MessageIn, user = Depends(auth_dep)):
             raise HTTPException(404, "Recipient not found")
         now = int(time.time())
         cur = conn.execute(
-            "INSERT INTO messages (sender_id, recipient_id, ciphertext, hint, created_at) VALUES (?,?,?,?,?)",
-            (user["id"], body.recipientId, body.ciphertext, body.hint, now)
+            "INSERT INTO messages (sender_id, recipient_id, ciphertext, hint, reply_to_id, created_at) VALUES (?,?,?,?,?,?)",
+            (user["id"], body.recipientId, body.ciphertext, body.hint, body.replyToId, now)
         )
+    _fire_push([body.recipientId], f"New message from {user['email']}", body.hint or "encrypted message")
     return {"id": cur.lastrowid, "createdAt": now}
 
 
@@ -719,6 +783,19 @@ def unread_count(user = Depends(require_user)):
             )
         """, (uid, uid)).fetchone()[0]
     return {"unread": dm + (grp or 0)}
+
+
+@app.post("/api/push-subscription", status_code=201)
+def register_push_subscription(body: PushSubscriptionIn, request: Request, user = Depends(require_user)):
+    import json
+    user_agent = request.headers.get("user-agent", "unknown")
+    now = int(time.time())
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO push_subscriptions (user_id, subscription_json, user_agent, created_at) VALUES (?,?,?,?)",
+            (user["id"], json.dumps(body.subscription), user_agent, now)
+        )
+    return {"ok": True}
 
 
 def _require_group_member(conn, group_id: int, user_id: int):
@@ -836,7 +913,7 @@ def group_messages_list(group_id: int, limit: int = 200, user = Depends(require_
     with db() as conn:
         _require_group_member(conn, group_id, user["id"])
         rows = conn.execute("""
-            SELECT id, sender_id, ciphertext, hint, created_at
+            SELECT id, sender_id, ciphertext, hint, reply_to_id, created_at
               FROM group_messages
              WHERE group_id = ?
              ORDER BY created_at DESC
@@ -855,6 +932,7 @@ def group_messages_list(group_id: int, limit: int = 200, user = Depends(require_
         "senderEmail": emails.get(r["sender_id"]),
         "ciphertext": r["ciphertext"],
         "hint": r["hint"],
+        "replyToId": r["reply_to_id"],
         "createdAt": r["created_at"],
     } for r in rows]
 
@@ -865,9 +943,17 @@ def group_message_send(group_id: int, body: GroupMessageIn, user = Depends(auth_
         _require_group_member(conn, group_id, user["id"])
         now = int(time.time())
         cur = conn.execute(
-            "INSERT INTO group_messages (group_id, sender_id, ciphertext, hint, created_at) VALUES (?,?,?,?,?)",
-            (group_id, user["id"], body.ciphertext, body.hint, now)
+            "INSERT INTO group_messages (group_id, sender_id, ciphertext, hint, reply_to_id, created_at) VALUES (?,?,?,?,?,?)",
+            (group_id, user["id"], body.ciphertext, body.hint, body.replyToId, now)
         )
+        # Get all group members to notify
+        members = conn.execute(
+            "SELECT user_id FROM group_members WHERE group_id = ? AND user_id != ?",
+            (group_id, user["id"])
+        ).fetchall()
+
+    member_ids = [m["user_id"] for m in members]
+    _fire_push(member_ids, "New group message", body.hint or "encrypted message")
     return {"id": cur.lastrowid, "createdAt": now}
 
 
