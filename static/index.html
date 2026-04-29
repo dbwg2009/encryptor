@@ -211,10 +211,16 @@
           <h3 class="section-h" style="margin:0;">Conversations</h3>
           <button class="btn primary" id="msg-new" type="button">+ New</button>
         </div>
+        <div class="msg-section-h">Groups</div>
+        <div id="msg-groups" class="msg-threads"></div>
+        <div id="msg-groups-empty" class="empty hidden" style="padding:8px;">
+          <p class="muted small">No groups yet. Click <b>+ New → Group</b> to create or join one.</p>
+        </div>
+
+        <div class="msg-section-h">Direct messages</div>
         <div id="msg-threads" class="msg-threads"></div>
-        <div id="msg-threads-empty" class="empty hidden" style="padding:20px 8px;">
-          <p>No conversations yet</p>
-          <p class="muted small">Click <b>+ New</b> to message another user.</p>
+        <div id="msg-threads-empty" class="empty hidden" style="padding:8px;">
+          <p class="muted small">No direct messages yet.</p>
         </div>
       </aside>
 
@@ -353,19 +359,70 @@
 <div class="modal hidden" id="new-msg-modal">
   <div class="modal-card">
     <header class="modal-head">
-      <h3>Start conversation</h3>
+      <h3>Start Something New</h3>
       <button class="icon-btn" id="nm-close" type="button">close</button>
     </header>
-    <div class="form">
+    
+    <div class="tabs" style="margin: 4px 0 14px;">
+      <button class="tab active" data-nm-tab="dm" type="button">Direct</button>
+      <button class="tab" data-nm-tab="create" type="button">Create group</button>
+      <button class="tab" data-nm-tab="join" type="button">Join group</button>
+    </div>
+
+    <!-- Direct -->
+    <div class="form" id="nm-pane-dm">
       <label class="field">
-        <span>Recipient</span>
-        <select id="nm-recipient" class="select"></select>
+        <span>Recipient email</span>
+        <input id="nm-email" type="email" autocomplete="off" spellcheck="false" placeholder="alice@example.com">
       </label>
       <p class="muted small">
-        Messages are encrypted in your browser with a preshared key before they
-        reach the server. The recipient needs the same key (in their vault, or
-        entered manually) to read them.
+        We'll look up their account by email. Messages are end-to-end encrypted
+        with a preshared key — the recipient needs the same key to read them.
       </p>
+      <p id="nm-dm-error" class="form-error hidden"></p>
+      <div class="modal-foot">
+        <button class="btn ghost" data-nm-cancel type="button">Cancel</button>
+        <button class="btn primary" id="nm-open-dm" type="button">Open conversation</button>
+      </div>
+    </div>
+
+    <!-- Create group -->
+    <div class="form hidden" id="nm-pane-create">
+      <label class="field">
+        <span>Group name</span>
+        <input id="nm-group-name" type="text" maxlength="80" placeholder="Project X">
+      </label>
+      <label class="field">
+        <span>Encryption key <span class="hint">(also the join code)</span></span>
+        <div class="pw-row">
+          <input id="nm-group-pass" type="text" autocomplete="off" spellcheck="false" placeholder="Generate or paste">
+          <button class="icon-btn" id="nm-group-gen" type="button">gen</button>
+        </div>
+      </label>
+      <p class="muted small">
+        Anyone you share the join code with can decrypt every message in this
+        group. The server never sees the key.
+      </p>
+      <p id="nm-group-share" class="muted small hidden"
+         style="word-break:break-all;background:rgba(255,255,255,0.04);padding:8px;border-radius:6px;"></p>
+      <p id="nm-create-error" class="form-error hidden"></p>
+      <div class="modal-foot">
+        <button class="btn ghost" data-nm-cancel type="button">Cancel</button>
+        <button class="btn primary" id="nm-create-go" type="button">Create group</button>
+      </div>
+    </div>
+
+    <!-- Join group -->
+    <div class="form hidden" id="nm-pane-join">
+      <label class="field">
+        <span>Join code</span>
+        <input id="nm-join-code" type="text" autocomplete="off" spellcheck="false" placeholder="42:s3cr3tpassphrase…">
+      </label>
+      <p class="muted small">
+        Paste the full <code>id:key</code> code shared with you. The same code
+        is used to decrypt the group's messages.
+      </p>
+      <p id="nm-join-error" class="form-error hidden"></p>
       <div class="modal-foot">
         <button class="btn ghost" id="nm-cancel" type="button">Cancel</button>
         <button class="btn primary" id="nm-open" type="button">Open conversation</button>
