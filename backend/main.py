@@ -142,10 +142,31 @@ CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(use
 """
 
 
+def _migrate(conn):
+    """Apply additive column migrations safely."""
+    migrations = [
+        ("messages",       "reply_to_id", "INTEGER REFERENCES messages(id) ON DELETE SET NULL"),
+        ("group_messages", "reply_to_id", "INTEGER REFERENCES group_messages(id) ON DELETE SET NULL"),
+        ("push_subscriptions", None, None),  # table-level check only
+    ]
+    existing_tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    for table, col, coldef in migrations:
+        if col is None:
+            continue
+        if table not in existing_tables:
+            continue
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coldef}")
+
+
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 @contextmanager
@@ -669,25 +690,29 @@ def messages_list(peer: int, limit: int = 200, user = Depends(require_user)):
     } for r in rows]
 
 
-async def send_push_notifications(recipient_id: int, title: str, body: str, url: str = "/"):
-    """Send push notifications to all subscriptions for a user"""
-    import json
-    with db() as conn:
-        subs = conn.execute(
-            "SELECT subscription_json FROM push_subscriptions WHERE user_id = ?",
-            (recipient_id,)
-        ).fetchall()
-    # In a real implementation, you would send HTTP POST requests to each subscription endpoint
-    # For now, this just logs that notifications would be sent
-    for sub in subs:
-        try:
-            sub_data = json.loads(sub[0])
-            # A full implementation would use the `web-push` library or similar
-            # to send encrypted push messages to the push service endpoint
-            # For demo: web-push send would happen here
-            print(f"Would send push notification: {title} - {body}")
-        except Exception as e:
-            print(f"Error processing push subscription: {e}")
+def _fire_push(recipient_ids: list, title: str, body_text: str):
+    """Fire-and-forget push notification to a list of user IDs (runs in background thread)."""
+    import json, threading
+    def _send():
+        for uid in recipient_ids:
+            try:
+                with db() as conn:
+                    subs = conn.execute(
+                        "SELECT id, subscription_json FROM push_subscriptions WHERE user_id = ?",
+                        (uid,)
+                    ).fetchall()
+                for sub in subs:
+                    try:
+                        sub_data = json.loads(sub["subscription_json"])
+                        endpoint = sub_data.get("endpoint", "")
+                        # Real Web Push would POST to endpoint with encrypted payload.
+                        # Requires VAPID keys + pywebpush library. Logged for now.
+                        print(f"[push] → {endpoint[:60]}… | {title}: {body_text[:40]}")
+                    except Exception as e:
+                        print(f"[push] error: {e}")
+            except Exception as e:
+                print(f"[push] db error: {e}")
+    threading.Thread(target=_send, daemon=True).start()
 
 
 @app.post("/api/messages", status_code=201)
@@ -703,17 +728,7 @@ def message_send(body: MessageIn, user = Depends(auth_dep)):
             "INSERT INTO messages (sender_id, recipient_id, ciphertext, hint, reply_to_id, created_at) VALUES (?,?,?,?,?,?)",
             (user["id"], body.recipientId, body.ciphertext, body.hint, body.replyToId, now)
         )
-    # Queue push notification for recipient (fire and forget)
-    import asyncio
-    try:
-        asyncio.create_task(send_push_notifications(
-            body.recipientId,
-            f"Message from {user['email']}",
-            body.hint or body.ciphertext[:50],
-            f"/?thread={user['id']}"
-        ))
-    except:
-        pass  # Notification failure shouldn't fail the message send
+    _fire_push([body.recipientId], f"New message from {user['email']}", body.hint or "encrypted message")
     return {"id": cur.lastrowid, "createdAt": now}
 
 
@@ -937,19 +952,8 @@ def group_message_send(group_id: int, body: GroupMessageIn, user = Depends(auth_
             (group_id, user["id"])
         ).fetchall()
 
-    # Send push notifications to other group members
-    import asyncio
-    for member in members:
-        try:
-            asyncio.create_task(send_push_notifications(
-                member["user_id"],
-                f"New group message",
-                body.hint or body.ciphertext[:50],
-                f"/?group={group_id}"
-            ))
-        except:
-            pass
-
+    member_ids = [m["user_id"] for m in members]
+    _fire_push(member_ids, "New group message", body.hint or "encrypted message")
     return {"id": cur.lastrowid, "createdAt": now}
 
 
