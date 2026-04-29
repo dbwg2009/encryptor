@@ -628,9 +628,19 @@ a { color: var(--accent-hi); }
 }
 .msg-sidebar-head .btn { padding: 6px 12px; font-size: 12px; }
 .msg-threads {
-  flex: 1; overflow-y: auto;
   display: flex; flex-direction: column; gap: 4px;
+  margin-bottom: 8px;
 }
+.msg-section-h {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 8px 4px 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-soft);
+}
+.msg-sidebar > .msg-section-h:first-of-type { border-top: none; padding-top: 0; }
 .msg-thread {
   background: transparent;
   border: 1px solid transparent;

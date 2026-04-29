@@ -146,6 +146,15 @@ export async function deriveAuthAndVault(password, saltHex, iterations = 200_000
   };
 }
 
+// ─── Group key derivation ──────────────────────────────────────
+// Same shape as deriveAuthAndVault but with a group's passcode + salt.
+// authHash is sent to the server as a verifier; groupKey is used client-side
+// (1) as the AES-GCM key to encrypt/decrypt group messages, and (2) it can be
+// wrapped under the user's vaultKey for storage.
+export async function deriveGroupAuth(passcode, saltHex, iterations = 200_000) {
+  return deriveAuthAndVault(passcode, saltHex, iterations);
+}
+
 // ─── AES-GCM for vault items ───────────────────────────────────
 // Wire format: base64( iv(12) || ciphertext+tag ).
 async function importAesKey(rawKey) {
@@ -174,6 +183,25 @@ export async function openString(b64, vaultKey) {
 
 export async function sealJson(obj, vaultKey) { return sealString(JSON.stringify(obj), vaultKey); }
 export async function openJson(b64, vaultKey) { return JSON.parse(await openString(b64, vaultKey)); }
+
+// Wrap an arbitrary byte array (e.g. a 32-byte group key) under another key.
+export async function sealBytes(bytes, wrappingKey) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await importAesKey(wrappingKey);
+  const ct = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv }, key, bytes));
+  const out = new Uint8Array(iv.length + ct.length);
+  out.set(iv, 0);
+  out.set(ct, iv.length);
+  return bytesToB64(out);
+}
+export async function openBytes(b64, wrappingKey) {
+  const buf = b64ToBytes(b64);
+  if (buf.length < 13) throw new Error("ciphertext too short");
+  const iv = buf.subarray(0, 12);
+  const ct = buf.subarray(12);
+  const key = await importAesKey(wrappingKey);
+  return new Uint8Array(await subtle.decrypt({ name: "AES-GCM", iv }, key, ct));
+}
 
 // ─── Passphrase generator ──────────────────────────────────────
 export function generatePassphrase(length = 24) {

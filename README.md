@@ -25,6 +25,13 @@ architecture so the server never sees your master password or saved keys.
 - **Settings** — change master password (re-wraps the whole vault in one
   transaction), revoke sessions individually, export / import an encrypted
   vault backup, delete account.
+- **Direct messages** — start a chat by entering the recipient's email
+  (no public user directory). Messages are encrypted in the browser with a
+  preshared key from your vault before they reach the server.
+- **Group chats** — create a group; the encryption key doubles as the join
+  code (`<groupId>:<passphrase>`). Anyone with the code can join and decrypt
+  messages. The server stores only an Argon2id verifier and the wrapped group
+  key (sealed under each member's vault key).
 - **Standalone mode** — `/standalone` serves the original single-file
   `cipher.html` for emergency / no-account use.
 - **Hardened defaults** — Argon2id over the client-derived auth hash, CSP,
@@ -242,6 +249,15 @@ matching the `csrf` cookie issued at login.
 | DELETE | `/api/history/{id}`           | remove one                              |
 | GET    | `/api/sessions`               | list your sessions                      |
 | DELETE | `/api/sessions/{id}`          | revoke one                              |
+| POST   | `/api/messages/lookup`        | find a user by email (to start a DM)    |
+| POST   | `/api/groups`                 | create encrypted group chat             |
+| GET    | `/api/groups`                 | list groups you belong to               |
+| GET    | `/api/groups/{id}/preflight`  | fetch salt/name to compute join verifier|
+| POST   | `/api/groups/{id}/join`       | join with `<id>:<passphrase>` code      |
+| POST   | `/api/groups/{id}/leave`      | leave group                             |
+| GET    | `/api/groups/{id}/messages`   | list group messages                     |
+| POST   | `/api/groups/{id}/messages`   | send group message                      |
+| POST   | `/api/groups/{id}/read`       | mark current user caught up             |
 | GET    | `/api/health`                 | health probe                            |
 
 ---
