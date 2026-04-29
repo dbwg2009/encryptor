@@ -652,8 +652,194 @@ def unread_count(user = Depends(require_user)):
             "SELECT COUNT(*) FROM messages WHERE recipient_id = ? AND read_at IS NULL AND deleted_by_recipient = 0",
             (user["id"],)
         ).fetchone()[0]
-    return {"unread": n}
+        grp = conn.execute("""
+            SELECT COALESCE(SUM(c), 0) FROM (
+              SELECT (SELECT COUNT(*) FROM group_messages
+                        WHERE group_id = gm.group_id
+                          AND created_at > gm.last_read_at
+                          AND sender_id != ?) AS c
+                FROM group_members gm
+               WHERE gm.user_id = ?
+            )
+        """, (uid, uid)).fetchone()[0]
+    return {"unread": dm + (grp or 0)}
 
+
+def _require_group_member(conn, group_id: int, user_id: int):
+    row = conn.execute(
+        "SELECT wrapped_key, last_read_at FROM group_members WHERE group_id = ? AND user_id = ?",
+        (group_id, user_id),
+    ).fetchone()
+    if not row:
+        raise HTTPException(403, "Not a member of this group")
+    return row
+
+
+@app.post("/api/groups", status_code=201)
+def group_create(body: GroupCreateIn, user = Depends(auth_dep)):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "Name required")
+    salt_bytes = bytes.fromhex(body.salt)
+    verifier = hasher.hash(body.authHash.lower())
+    now = int(time.time())
+    with db() as conn:
+        conn.execute("BEGIN")
+        try:
+            cur = conn.execute(
+                "INSERT INTO groups (name, salt, verifier_hash, created_by, created_at) VALUES (?,?,?,?,?)",
+                (name, salt_bytes, verifier, user["id"], now)
+            )
+            gid = cur.lastrowid
+            conn.execute(
+                "INSERT INTO group_members (group_id, user_id, wrapped_key, joined_at, last_read_at) VALUES (?,?,?,?,?)",
+                (gid, user["id"], body.wrappedKey, now, now)
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise HTTPException(500, "Could not create group")
+    return {"id": gid, "name": name, "salt": body.salt, "createdAt": now}
+
+
+@app.get("/api/groups")
+def groups_list(user = Depends(require_user)):
+    uid = user["id"]
+    with db() as conn:
+        rows = conn.execute("""
+            SELECT g.id, g.name, g.salt, gm.wrapped_key, gm.last_read_at,
+                   (SELECT MAX(created_at) FROM group_messages WHERE group_id = g.id) AS last_at,
+                   (SELECT COUNT(*) FROM group_messages
+                      WHERE group_id = g.id AND created_at > gm.last_read_at AND sender_id != ?) AS unread
+              FROM group_members gm
+              JOIN groups g ON g.id = gm.group_id
+             WHERE gm.user_id = ?
+             ORDER BY COALESCE(last_at, gm.joined_at) DESC
+        """, (uid, uid)).fetchall()
+    return [{
+        "id": r["id"],
+        "name": r["name"],
+        "salt": r["salt"].hex(),
+        "wrappedKey": r["wrapped_key"],
+        "lastAt": r["last_at"],
+        "unread": r["unread"],
+    } for r in rows]
+
+
+@app.get("/api/groups/{group_id}/preflight")
+def group_preflight(group_id: int, user = Depends(require_user)):
+    with db() as conn:
+        row = conn.execute("SELECT id, name, salt FROM groups WHERE id = ?", (group_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Group not found")
+    return {"id": row["id"], "name": row["name"], "salt": row["salt"].hex()}
+
+
+@app.post("/api/groups/{group_id}/join", status_code=201)
+def group_join(group_id: int, body: GroupJoinIn, request: Request, user = Depends(auth_dep)):
+    rate_limit(f"groupjoin:{client_ip(request)}", 20, 60)
+    with db() as conn:
+        g = conn.execute("SELECT verifier_hash FROM groups WHERE id = ?", (group_id,)).fetchone()
+        if not g:
+            raise HTTPException(404, "Group not found")
+        try:
+            hasher.verify(g["verifier_hash"], body.authHash.lower())
+        except (VerifyMismatchError, InvalidHash):
+            raise HTTPException(403, "Wrong join code")
+        now = int(time.time())
+        existing = conn.execute(
+            "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?", (group_id, user["id"])
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE group_members SET wrapped_key = ? WHERE group_id = ? AND user_id = ?",
+                (body.wrappedKey, group_id, user["id"])
+            )
+        else:
+            conn.execute(
+                "INSERT INTO group_members (group_id, user_id, wrapped_key, joined_at, last_read_at) VALUES (?,?,?,?,?)",
+                (group_id, user["id"], body.wrappedKey, now, now)
+            )
+    return {"ok": True}
+
+
+@app.post("/api/groups/{group_id}/leave")
+def group_leave(group_id: int, user = Depends(auth_dep)):
+    with db() as conn:
+        _require_group_member(conn, group_id, user["id"])
+        conn.execute("DELETE FROM group_members WHERE group_id = ? AND user_id = ?", (group_id, user["id"]))
+        remaining = conn.execute("SELECT COUNT(*) FROM group_members WHERE group_id = ?", (group_id,)).fetchone()[0]
+        if remaining == 0:
+            conn.execute("DELETE FROM groups WHERE id = ?", (group_id,))
+    return Response(status_code=204)
+
+
+@app.get("/api/groups/{group_id}/messages")
+def group_messages_list(group_id: int, limit: int = 200, user = Depends(require_user)):
+    limit = max(1, min(limit, 500))
+    with db() as conn:
+        _require_group_member(conn, group_id, user["id"])
+        rows = conn.execute("""
+            SELECT id, sender_id, ciphertext, hint, created_at
+              FROM group_messages
+             WHERE group_id = ?
+             ORDER BY created_at DESC
+             LIMIT ?
+        """, (group_id, limit)).fetchall()
+        senders = {r["sender_id"] for r in rows if r["sender_id"] is not None}
+        emails = {}
+        if senders:
+            qmarks = ",".join("?" * len(senders))
+            for u in conn.execute(f"SELECT id, email FROM users WHERE id IN ({qmarks})", tuple(senders)).fetchall():
+                emails[u["id"]] = u["email"]
+    return [{
+        "id": r["id"],
+        "fromMe": r["sender_id"] == user["id"],
+        "senderId": r["sender_id"],
+        "senderEmail": emails.get(r["sender_id"]),
+        "ciphertext": r["ciphertext"],
+        "hint": r["hint"],
+        "createdAt": r["created_at"],
+    } for r in rows]
+
+
+@app.post("/api/groups/{group_id}/messages", status_code=201)
+def group_message_send(group_id: int, body: GroupMessageIn, user = Depends(auth_dep)):
+    with db() as conn:
+        _require_group_member(conn, group_id, user["id"])
+        now = int(time.time())
+        cur = conn.execute(
+            "INSERT INTO group_messages (group_id, sender_id, ciphertext, hint, created_at) VALUES (?,?,?,?,?)",
+            (group_id, user["id"], body.ciphertext, body.hint, now)
+        )
+    return {"id": cur.lastrowid, "createdAt": now}
+
+
+@app.post("/api/groups/{group_id}/read")
+def group_mark_read(group_id: int, user = Depends(auth_dep)):
+    now = int(time.time())
+    with db() as conn:
+        _require_group_member(conn, group_id, user["id"])
+        conn.execute(
+            "UPDATE group_members SET last_read_at = ? WHERE group_id = ? AND user_id = ?",
+            (now, group_id, user["id"])
+        )
+    return {"ok": True}
+
+
+@app.delete("/api/groups/{group_id}/messages/{msg_id}")
+def group_message_delete(group_id: int, msg_id: int, user = Depends(auth_dep)):
+    with db() as conn:
+        _require_group_member(conn, group_id, user["id"])
+        row = conn.execute(
+            "SELECT sender_id FROM group_messages WHERE id = ? AND group_id = ?", (msg_id, group_id)
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, "Not found")
+        if row["sender_id"] != user["id"]:
+            raise HTTPException(403, "Not your message")
+        conn.execute("DELETE FROM group_messages WHERE id = ?", (msg_id,))
+    return Response(status_code=204)
 
 @app.get("/api/health")
 def health():
