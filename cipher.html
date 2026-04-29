@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASCII Cipher — Secure</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --surface: #252540;
+    --surface-hi: #2d2d4d;
+    --surface-hover: #313157;
+    --border: rgba(108, 99, 255, 0.18);
+    --border-soft: rgba(255, 255, 255, 0.06);
+    --accent: #6c63ff;
+    --accent-hi: #8a83ff;
+    --accent-dim: rgba(108, 99, 255, 0.15);
+    --accent2: #43c9a0;
+    --accent2-hi: #5fdcb6;
+    --warn: #e05c5c;
+    --warn-hi: #f07878;
+    --gold: #e0a030;
+    --fg: #e8e8f0;
+    --fg-dim: #7a7a99;
+    --fg-hi: #ffffff;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background:
+      radial-gradient(circle at 18% -10%, rgba(108, 99, 255, 0.18), transparent 45%),
+      radial-gradient(circle at 90% 110%, rgba(67, 201, 160, 0.12), transparent 45%),
+      var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", system-ui, sans-serif;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  button, input, textarea, select { font-family: inherit; color: inherit; }
+  textarea { resize: none; }
+
+  /* ── Layout ─────────────────────────────────────────────── */
+  .shell {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 28px 24px 80px;
+  }
+
+  header.top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    margin-bottom: 22px;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 12px;
+  }
+  .logo {
+    width: 32px; height: 32px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: grid; place-items: center;
+    font-family: var(--mono);
+    font-weight: 700;
+    color: white;
+    font-size: 13px;
+    box-shadow: 0 6px 18px rgba(108, 99, 255, 0.35);
+  }
+  .brand h1 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .brand .sub {
+    color: var(--fg-dim);
+    font-size: 11px;
+    font-family: var(--mono);
+    letter-spacing: 0.04em;
+  }
+  .top-meta {
+    color: var(--fg-dim);
+    font-size: 11px;
+    font-family: var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .top-meta .dot {
+    display: inline-block;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent2);
+    margin-right: 6px;
+    box-shadow: 0 0 8px var(--accent2);
+    vertical-align: middle;
+  }
+
+  /* ── Card ───────────────────────────────────────────────── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    padding: 22px;
+    margin-bottom: 18px;
+  }
+  .card-label {
+    color: var(--fg-dim);
+    font-size: 10px;
+    font-family: var(--mono);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .card-label .hint {
+    color: var(--fg-dim);
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    text-transform: none;
+    font-family: var(--mono);
+    font-size: 10px;
+    opacity: 0.7;
+  }
+
+  /* ── Key field ──────────────────────────────────────────── */
+  .key-row {
+    display: flex; align-items: stretch; gap: 8px;
+    background: var(--surface-hi);
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 4px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .key-row:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+  .key-row input {
+    flex: 1;
+    background: transparent;
+    border: 0;
+    outline: none;
+    padding: 10px 12px;
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--fg);
+    letter-spacing: 0.05em;
+  }
+  .key-row input::placeholder { color: var(--fg-dim); opacity: 0.65; }
+  .icon-btn {
+    background: transparent;
+    border: 0;
+    color: var(--fg-dim);
+    padding: 0 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: var(--mono);
+    letter-spacing: 0.06em;
+    transition: background 0.15s, color 0.15s;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .icon-btn:hover { background: var(--surface-hover); color: var(--fg); }
+  .icon-btn:active { transform: scale(0.97); }
+  .icon-btn svg { width: 14px; height: 14px; }
+
+  /* ── Strength meter ─────────────────────────────────────── */
+  .strength {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .strength-track {
+    flex: 1;
+    height: 6px;
+    background: var(--surface-hi);
+    border-radius: 999px;
+    overflow: hidden;
+    position: relative;
+  }
+  .strength-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--fg-dim);
+    border-radius: 999px;
+    transition: width 0.25s ease, background 0.25s ease, box-shadow 0.25s;
+  }
+  .strength-fill.s-weak   { background: var(--warn);   box-shadow: 0 0 12px rgba(224, 92, 92, 0.45); }
+  .strength-fill.s-fair   { background: var(--gold);   box-shadow: 0 0 12px rgba(224, 160, 48, 0.45); }
+  .strength-fill.s-good   { background: var(--accent2);box-shadow: 0 0 12px rgba(67, 201, 160, 0.45); }
+  .strength-fill.s-strong { background: var(--accent2);box-shadow: 0 0 16px rgba(67, 201, 160, 0.65); }
+  .strength-text {
+    color: var(--fg-dim);
+    font-size: 11px;
+    font-family: var(--mono);
+    letter-spacing: 0.05em;
+    min-width: 110px;
+    text-align: right;
+  }
+
+  /* ── Mode toggle ────────────────────────────────────────── */
+  .mode-row {
+    display: flex; gap: 8px; margin-bottom: 14px;
+  }
+  .mode-btn {
+    flex: 1;
+    background: var(--surface-hi);
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: var(--fg-dim);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: all 0.15s;
+  }
+  .mode-btn:hover { color: var(--fg); background: var(--surface-hover); }
+  .mode-btn.active.encrypt {
+    color: var(--fg-hi);
+    background: linear-gradient(135deg, rgba(108, 99, 255, 0.25), rgba(108, 99, 255, 0.10));
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+  .mode-btn.active.decrypt {
+    color: var(--fg-hi);
+    background: linear-gradient(135deg, rgba(67, 201, 160, 0.22), rgba(67, 201, 160, 0.08));
+    border-color: var(--accent2);
+    box-shadow: 0 0 0 3px rgba(67, 201, 160, 0.15);
+  }
+  .mode-btn .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; opacity: 0.7;
+  }
+
+  /* ── Textareas ──────────────────────────────────────────── */
+  .io {
+    width: 100%;
+    min-height: 140px;
+    background: var(--surface-hi);
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 14px;
+    font-family: var(--mono);
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--fg);
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .io:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+  .io.drop { border-color: var(--accent2); box-shadow: 0 0 0 3px rgba(67, 201, 160, 0.18); }
+  .io.read-only { color: var(--fg); cursor: text; }
+  .io::placeholder { color: var(--fg-dim); opacity: 0.55; }
+
+  /* ── Action bar ─────────────────────────────────────────── */
+  .actions {
+    display: flex; align-items: center; gap: 8px;
+    margin: 16px 0 4px;
+    flex-wrap: wrap;
+  }
+  .btn {
+    background: var(--surface-hi);
+    color: var(--fg);
+    border: 0;
+    padding: 11px 18px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 7px;
+    transition: transform 0.08s, background 0.15s, box-shadow 0.15s;
+  }
+  .btn:hover { background: var(--surface-hover); }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn.primary {
+    background: linear-gradient(135deg, var(--accent), #574fdb);
+    color: white;
+    box-shadow: 0 6px 18px rgba(108, 99, 255, 0.35);
+  }
+  .btn.primary:hover { background: linear-gradient(135deg, var(--accent-hi), #6760e3); }
+  .btn.success {
+    background: linear-gradient(135deg, var(--accent2), #36a684);
+    color: #0d1f1a;
+    box-shadow: 0 6px 18px rgba(67, 201, 160, 0.32);
+    font-weight: 600;
+  }
+  .btn.success:hover { background: linear-gradient(135deg, var(--accent2-hi), #41bd97); }
+  .btn .kbd {
+    font-family: var(--mono); font-size: 10px;
+    background: rgba(0,0,0,0.18);
+    color: rgba(255,255,255,0.85);
+    padding: 2px 6px; border-radius: 4px; letter-spacing: 0.04em;
+  }
+  .btn svg { width: 14px; height: 14px; }
+  .spacer { flex: 1; }
+
+  /* ── Output card flourishes ─────────────────────────────── */
+  .out-meta {
+    display: flex; gap: 14px; flex-wrap: wrap;
+    color: var(--fg-dim);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    margin-top: 10px;
+  }
+  .out-meta span b { color: var(--fg); font-weight: 500; }
+
+  /* ── Toasts ─────────────────────────────────────────────── */
+  .toasts {
+    position: fixed; bottom: 24px; right: 24px;
+    display: flex; flex-direction: column; gap: 10px;
+    z-index: 100;
+    pointer-events: none;
+  }
+  .toast {
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-left: 3px solid var(--accent2);
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-size: 13px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.4);
+    min-width: 220px;
+    max-width: 360px;
+    animation: toastIn 0.22s ease-out;
+    pointer-events: auto;
+  }
+  .toast.error   { border-left-color: var(--warn); }
+  .toast.info    { border-left-color: var(--accent); }
+  .toast .t-title { font-size: 11px; color: var(--fg-dim); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 2px; }
+  .toast .t-body  { color: var(--fg); }
+  .toast.fade-out { animation: toastOut 0.18s ease-in forwards; }
+  @keyframes toastIn  { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  @keyframes toastOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(20px); opacity: 0; } }
+
+  /* ── Tag (auto-detected) ───────────────────────────────── */
+  .tag {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: var(--accent-dim);
+    color: var(--accent-hi);
+  }
+
+  /* ── Footer ─────────────────────────────────────────────── */
+  footer {
+    margin-top: 24px;
+    text-align: center;
+    color: var(--fg-dim);
+    font-size: 11px;
+    font-family: var(--mono);
+    letter-spacing: 0.06em;
+    line-height: 1.7;
+  }
+  footer kbd {
+    background: var(--surface);
+    color: var(--fg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    border: 1px solid var(--border-soft);
+  }
+
+  /* ── Responsive ─────────────────────────────────────────── */
+  @media (max-width: 600px) {
+    .shell { padding: 16px 12px 60px; }
+    .card { padding: 16px; }
+    header.top { flex-direction: column; gap: 8px; align-items: flex-start; }
+    .actions .btn { padding: 10px 14px; font-size: 12px; }
+    .btn .kbd { display: none; }
+  }
+
+  /* ── Util ───────────────────────────────────────────────── */
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <header class="top">
+    <div class="brand">
+      <div class="logo">AC</div>
+      <div>
+        <h1>ASCII Cipher</h1>
+        <div class="sub">PBKDF2 · HMAC-SHA256 · 200k rounds</div>
+      </div>
+    </div>
+    <div class="top-meta"><span class="dot"></span>client-side · zero network</div>
+  </header>
+
+  <!-- Key card -->
+  <section class="card">
+    <div class="card-label">
+      <span>Key</span>
+      <span class="hint">Used to derive encryption + MAC keys</span>
+    </div>
+    <div class="key-row">
+      <input id="key" type="password" placeholder="Enter passphrase…" autocomplete="off" spellcheck="false">
+      <button class="icon-btn" id="gen-key" title="Generate strong passphrase">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+        gen
+      </button>
+      <button class="icon-btn" id="show-key" title="Show / hide">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+        show
+      </button>
+      <button class="icon-btn" id="copy-key" title="Copy key">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        copy
+      </button>
+    </div>
+    <div class="strength">
+      <div class="strength-track"><div class="strength-fill" id="strength-fill"></div></div>
+      <div class="strength-text" id="strength-text">—</div>
+    </div>
+  </section>
+
+  <!-- Mode toggle -->
+  <div class="mode-row">
+    <button class="mode-btn encrypt active" id="mode-encrypt" data-mode="encrypt">
+      <span class="dot"></span> Encrypt
+    </button>
+    <button class="mode-btn decrypt" id="mode-decrypt" data-mode="decrypt">
+      <span class="dot"></span> Decrypt
+    </button>
+  </div>
+
+  <!-- Input card -->
+  <section class="card">
+    <div class="card-label">
+      <span>Input <span id="input-tag" class="tag hidden">cipher detected</span></span>
+      <span class="hint" id="input-stats">0 chars</span>
+    </div>
+    <textarea id="input" class="io" placeholder="Type, paste, or drop a text file…" spellcheck="false"></textarea>
+
+    <div class="actions">
+      <button class="btn primary" id="run">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        <span id="run-label">Encrypt</span>
+        <span class="kbd">Ctrl+Enter</span>
+      </button>
+      <button class="btn" id="swap" title="Move output → input">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 16V4M7 4 3 8M7 4l4 4M17 8v12M17 20l-4-4M17 20l4-4"/></svg>
+        Swap
+      </button>
+      <button class="btn" id="paste">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>
+        Paste
+      </button>
+      <button class="btn" id="clear">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+        Clear
+      </button>
+    </div>
+  </section>
+
+  <!-- Output card -->
+  <section class="card">
+    <div class="card-label">
+      <span>Output</span>
+      <span class="hint" id="output-stats">empty</span>
+    </div>
+    <textarea id="output" class="io read-only" placeholder="Result will appear here." spellcheck="false" readonly></textarea>
+    <div class="actions">
+      <button class="btn success" id="copy-out">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        Copy output
+      </button>
+      <button class="btn" id="download-out">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        Download
+      </button>
+      <div class="spacer"></div>
+      <div class="out-meta" id="out-meta"></div>
+    </div>
+  </section>
+
+  <footer>
+    <kbd>Ctrl</kbd>+<kbd>Enter</kbd> run · <kbd>Ctrl</kbd>+<kbd>S</kbd> swap · <kbd>Ctrl</kbd>+<kbd>L</kbd> clear · <kbd>Ctrl</kbd>+<kbd>G</kbd> generate key
+    <br>
+    cross-compatible with the Python build · format <code style="color:var(--fg)">salt:ct:tag</code>
+  </footer>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+"use strict";
+
+/* ─────────────────────────────────────────────────────────────
+   Crypto core — byte-for-byte compatible with the Python file.
+   Format: hex(salt) ":" hex(ct) ":" hex(tag)
+   - PBKDF2-HMAC-SHA256, 200_000 iterations, 64 bytes derived
+   - First 32 bytes = enc_key, last 32 bytes = mac_key
+   - Keystream = SHA256(enc_key || salt || counter_be32) blocks
+   - Ciphertext = plaintext XOR keystream
+   - Tag = HMAC-SHA256(mac_key, salt || ct)
+   Do NOT change these constants — interoperability depends on them.
+   ───────────────────────────────────────────────────────────── */
+const SALT_LEN = 16;
+const ITERATIONS = 200_000;
+const KEY_LEN = 32;
+
+const subtle = crypto.subtle;
+
+async function deriveKeys(password, salt) {
+  const baseKey = await subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveBits"]
+  );
+  const bits = await subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: ITERATIONS, hash: "SHA-256" },
+    baseKey,
+    KEY_LEN * 2 * 8
+  );
+  const km = new Uint8Array(bits);
+  return [km.slice(0, KEY_LEN), km.slice(KEY_LEN)];
+}
+
+async function keystream(encKey, salt, length) {
+  const out = new Uint8Array(length);
+  const buf = new Uint8Array(encKey.length + salt.length + 4);
+  buf.set(encKey, 0);
+  buf.set(salt, encKey.length);
+  const counterView = new DataView(buf.buffer, encKey.length + salt.length, 4);
+  let counter = 0;
+  let off = 0;
+  while (off < length) {
+    counterView.setUint32(0, counter, false); // big-endian
+    const digest = new Uint8Array(await subtle.digest("SHA-256", buf));
+    const take = Math.min(digest.length, length - off);
+    out.set(digest.subarray(0, take), off);
+    off += take;
+    counter += 1;
+  }
+  return out;
+}
+
+async function hmacSha256(key, data) {
+  const k = await subtle.importKey(
+    "raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  return new Uint8Array(await subtle.sign("HMAC", k, data));
+}
+
+function bytesToHex(b) {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += b[i].toString(16).padStart(2, "0");
+  return s;
+}
+function hexToBytes(hex) {
+  if (hex.length % 2) throw new Error("bad hex");
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    const v = parseInt(hex.substr(i * 2, 2), 16);
+    if (Number.isNaN(v)) throw new Error("bad hex");
+    out[i] = v;
+  }
+  return out;
+}
+function ctEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let r = 0;
+  for (let i = 0; i < a.length; i++) r |= a[i] ^ b[i];
+  return r === 0;
+}
+
+async function encryptText(plaintext, password) {
+  const data = new TextEncoder().encode(plaintext);
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
+  const [encKey, macKey] = await deriveKeys(password, salt);
+  const ks = await keystream(encKey, salt, data.length);
+  const ct = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i++) ct[i] = data[i] ^ ks[i];
+  const macInput = new Uint8Array(salt.length + ct.length);
+  macInput.set(salt, 0);
+  macInput.set(ct, salt.length);
+  const tag = await hmacSha256(macKey, macInput);
+  return `${bytesToHex(salt)}:${bytesToHex(ct)}:${bytesToHex(tag)}`;
+}
+
+async function decryptToken(token, password) {
+  const parts = token.trim().split(":");
+  if (parts.length !== 3) return { ok: false, err: "invalid format" };
+  let salt, ct, tag;
+  try {
+    salt = hexToBytes(parts[0]);
+    ct   = hexToBytes(parts[1]);
+    tag  = hexToBytes(parts[2]);
+  } catch {
+    return { ok: false, err: "decryption failed" };
+  }
+  if (salt.length !== SALT_LEN) return { ok: false, err: "invalid format" };
+  const [encKey, macKey] = await deriveKeys(password, salt);
+  const macInput = new Uint8Array(salt.length + ct.length);
+  macInput.set(salt, 0);
+  macInput.set(ct, salt.length);
+  const expected = await hmacSha256(macKey, macInput);
+  if (!ctEqual(tag, expected)) return { ok: false, err: "wrong key or tampered" };
+  const ks = await keystream(encKey, salt, ct.length);
+  const pt = new Uint8Array(ct.length);
+  for (let i = 0; i < ct.length; i++) pt[i] = ct[i] ^ ks[i];
+  try {
+    return { ok: true, text: new TextDecoder("utf-8", { fatal: false }).decode(pt) };
+  } catch {
+    return { ok: false, err: "decryption failed" };
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   UI wiring
+   ───────────────────────────────────────────────────────────── */
+const $ = (id) => document.getElementById(id);
+
+const els = {
+  key: $("key"),
+  showKey: $("show-key"),
+  copyKey: $("copy-key"),
+  genKey: $("gen-key"),
+  strengthFill: $("strength-fill"),
+  strengthText: $("strength-text"),
+
+  modeEncrypt: $("mode-encrypt"),
+  modeDecrypt: $("mode-decrypt"),
+
+  input: $("input"),
+  inputTag: $("input-tag"),
+  inputStats: $("input-stats"),
+  output: $("output"),
+  outputStats: $("output-stats"),
+  outMeta: $("out-meta"),
+
+  run: $("run"),
+  runLabel: $("run-label"),
+  swap: $("swap"),
+  paste: $("paste"),
+  clear: $("clear"),
+  copyOut: $("copy-out"),
+  downloadOut: $("download-out"),
+
+  toasts: $("toasts"),
+};
+
+let mode = "encrypt"; // 'encrypt' | 'decrypt'
+
+/* ── Toasts ── */
+function toast(body, kind = "info", title = null) {
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  el.innerHTML = `${title ? `<div class="t-title">${title}</div>` : ""}<div class="t-body"></div>`;
+  el.querySelector(".t-body").textContent = body;
+  els.toasts.appendChild(el);
+  setTimeout(() => {
+    el.classList.add("fade-out");
+    el.addEventListener("animationend", () => el.remove(), { once: true });
+  }, 2400);
+}
+
+/* ── Key strength (entropy estimator, same logic as Python) ── */
+function updateStrength() {
+  const pw = els.key.value;
+  if (!pw) {
+    els.strengthFill.style.width = "0%";
+    els.strengthFill.className = "strength-fill";
+    els.strengthText.textContent = "—";
+    els.strengthText.style.color = "";
+    return;
+  }
+  const hLo = /[a-z]/.test(pw);
+  const hUp = /[A-Z]/.test(pw);
+  const hDi = /[0-9]/.test(pw);
+  const hSy = /[^A-Za-z0-9]/.test(pw);
+  const pool = Math.max((hLo ? 26 : 0) + (hUp ? 26 : 0) + (hDi ? 10 : 0) + (hSy ? 32 : 0), 26);
+  const bits = pw.length * Math.log2(pool);
+  let label, klass, pct;
+  if      (bits < 40)  { label = "Weak";   klass = "s-weak";   pct = Math.min(bits / 40 * 33, 33); }
+  else if (bits < 72)  { label = "Fair";   klass = "s-fair";   pct = 33 + (bits - 40) / 32 * 27; }
+  else if (bits < 100) { label = "Good";   klass = "s-good";   pct = 60 + (bits - 72) / 28 * 25; }
+  else                 { label = "Strong"; klass = "s-strong"; pct = Math.min(85 + (bits - 100) / 50 * 15, 100); }
+  els.strengthFill.style.width = pct + "%";
+  els.strengthFill.className = "strength-fill " + klass;
+  els.strengthText.textContent = `${label} · ${bits.toFixed(0)} bits`;
+}
+
+/* ── Mode handling ── */
+function setMode(m, { auto = false } = {}) {
+  mode = m;
+  els.modeEncrypt.classList.toggle("active", m === "encrypt");
+  els.modeDecrypt.classList.toggle("active", m === "decrypt");
+  els.runLabel.textContent = m === "encrypt" ? "Encrypt" : "Decrypt";
+  els.run.classList.toggle("primary", m === "encrypt");
+  els.run.classList.toggle("success", m === "decrypt");
+  if (auto) toast(`Switched to ${m}`, "info", "Auto-detect");
+}
+
+/* ── Auto-detect cipher format ── */
+const TOKEN_RE = /^[0-9a-fA-F]+:[0-9a-fA-F]+:[0-9a-fA-F]+$/;
+function detectInput() {
+  const v = els.input.value.trim();
+  const looksLikeToken = TOKEN_RE.test(v) && v.split(":")[0].length === SALT_LEN * 2;
+  els.inputTag.classList.toggle("hidden", !looksLikeToken);
+  els.inputStats.textContent = `${els.input.value.length.toLocaleString()} chars`;
+  return looksLikeToken;
+}
+
+/* ── Run (encrypt or decrypt) ── */
+let busy = false;
+async function run() {
+  if (busy) return;
+  const key = els.key.value;
+  if (!key) { toast("Enter a key first", "error", "Missing key"); els.key.focus(); return; }
+  const text = els.input.value;
+  if (!text) { toast("Nothing to process", "error", "Empty input"); els.input.focus(); return; }
+
+  busy = true;
+  const originalLabel = els.runLabel.textContent;
+  els.runLabel.textContent = mode === "encrypt" ? "Encrypting…" : "Decrypting…";
+  els.run.disabled = true;
+
+  const t0 = performance.now();
+  try {
+    if (mode === "encrypt") {
+      const out = await encryptText(text, key);
+      els.output.value = out;
+      const dt = (performance.now() - t0).toFixed(0);
+      const inB = new TextEncoder().encode(text).length;
+      const outB = (out.length - 2) / 2; // hex pairs minus 2 colons
+      els.outMeta.innerHTML = `<span><b>${inB}</b> B in</span><span><b>${out.length}</b> chars out</span><span><b>${dt}</b> ms</span>`;
+      toast("Encrypted", "info", "✓ Done");
+    } else {
+      const res = await decryptToken(text, key);
+      if (!res.ok) {
+        els.output.value = "";
+        els.outMeta.innerHTML = "";
+        if (res.err === "invalid format") toast("Token format is invalid", "error", "Cannot decrypt");
+        else if (res.err === "wrong key or tampered") toast("Wrong key or message was tampered with", "error", "MAC failed");
+        else toast(res.err, "error", "Cannot decrypt");
+      } else {
+        els.output.value = res.text;
+        const dt = (performance.now() - t0).toFixed(0);
+        els.outMeta.innerHTML = `<span><b>${res.text.length}</b> chars out</span><span><b>${dt}</b> ms</span>`;
+        toast("Decrypted", "info", "✓ Done");
+      }
+    }
+  } catch (e) {
+    toast(String(e?.message || e), "error", "Error");
+  } finally {
+    updateOutputStats();
+    els.runLabel.textContent = originalLabel;
+    els.run.disabled = false;
+    busy = false;
+  }
+}
+
+function updateOutputStats() {
+  const v = els.output.value;
+  els.outputStats.textContent = v ? `${v.length.toLocaleString()} chars` : "empty";
+}
+
+/* ── Generate strong passphrase ── */
+function generateKey() {
+  // 5 words of dice-style randomness using 4 random chars + dash separators.
+  // Actually uses cryptographic randomness over a curated alphabet.
+  const alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*";
+  const len = 24;
+  const buf = crypto.getRandomValues(new Uint32Array(len));
+  let s = "";
+  for (let i = 0; i < len; i++) s += alphabet[buf[i] % alphabet.length];
+  els.key.value = s;
+  els.key.type = "text";
+  els.showKey.querySelector("svg").style.opacity = "0.6";
+  updateStrength();
+  toast("Generated a 24-char passphrase. Copy it before encrypting!", "info", "New key");
+}
+
+/* ── Event wiring ── */
+els.key.addEventListener("input", updateStrength);
+els.showKey.addEventListener("click", () => {
+  els.key.type = els.key.type === "password" ? "text" : "password";
+});
+els.copyKey.addEventListener("click", async () => {
+  if (!els.key.value) { toast("No key to copy", "error", "Empty"); return; }
+  await navigator.clipboard.writeText(els.key.value);
+  toast("Key copied to clipboard", "info", "✓");
+});
+els.genKey.addEventListener("click", generateKey);
+
+els.modeEncrypt.addEventListener("click", () => setMode("encrypt"));
+els.modeDecrypt.addEventListener("click", () => setMode("decrypt"));
+
+els.input.addEventListener("input", () => {
+  const looksLikeToken = detectInput();
+  // gentle auto-switch on paste/typing — only toast when it changes
+  if (looksLikeToken && mode === "encrypt") setMode("decrypt", { auto: true });
+  else if (!looksLikeToken && els.input.value.trim().length > 0 && mode === "decrypt") setMode("encrypt", { auto: true });
+});
+
+els.run.addEventListener("click", run);
+
+els.swap.addEventListener("click", () => {
+  const i = els.input.value, o = els.output.value;
+  els.input.value = o;
+  els.output.value = i;
+  detectInput();
+  updateOutputStats();
+  els.outMeta.innerHTML = "";
+});
+
+els.paste.addEventListener("click", async () => {
+  try {
+    const t = await navigator.clipboard.readText();
+    els.input.value = t;
+    detectInput();
+    toast("Pasted from clipboard", "info", "✓");
+  } catch {
+    toast("Clipboard access denied", "error", "Paste");
+  }
+});
+
+els.clear.addEventListener("click", () => {
+  els.input.value = "";
+  els.output.value = "";
+  els.outMeta.innerHTML = "";
+  detectInput();
+  updateOutputStats();
+});
+
+els.copyOut.addEventListener("click", async () => {
+  if (!els.output.value) { toast("Nothing to copy", "error", "Empty"); return; }
+  await navigator.clipboard.writeText(els.output.value);
+  toast("Output copied to clipboard", "info", "✓");
+});
+
+els.downloadOut.addEventListener("click", () => {
+  if (!els.output.value) { toast("Nothing to download", "error", "Empty"); return; }
+  const blob = new Blob([els.output.value], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = mode === "encrypt" ? "cipher.txt" : "plaintext.txt";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+/* ── Drag & drop a text file into the input ── */
+els.input.addEventListener("dragover", (e) => { e.preventDefault(); els.input.classList.add("drop"); });
+els.input.addEventListener("dragleave", () => els.input.classList.remove("drop"));
+els.input.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  els.input.classList.remove("drop");
+  const f = e.dataTransfer?.files?.[0];
+  if (!f) return;
+  if (f.size > 5 * 1024 * 1024) { toast("File too large (5 MB max)", "error", "Drop"); return; }
+  els.input.value = await f.text();
+  detectInput();
+  toast(`Loaded ${f.name}`, "info", "✓");
+});
+
+/* ── Keyboard shortcuts ── */
+document.addEventListener("keydown", (e) => {
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (!ctrl) return;
+  switch (e.key.toLowerCase()) {
+    case "enter": e.preventDefault(); run(); break;
+    case "s":     e.preventDefault(); els.swap.click(); break;
+    case "l":     e.preventDefault(); els.clear.click(); break;
+    case "g":     e.preventDefault(); generateKey(); break;
+  }
+});
+
+/* ── Init ── */
+updateStrength();
+detectInput();
+updateOutputStats();
+els.key.focus();
+</script>
+</body>
+</html>
