@@ -5,8 +5,9 @@
 
 import {
   encryptText, decryptToken,
-  deriveAuthAndVault,
+  deriveAuthAndVault, deriveGroupAuth,
   sealJson, openJson, sealString, openString,
+  sealBytes, openBytes,
   generatePassphrase, passwordStrength,
   bytesToHex,
 } from "./crypto.js";
@@ -81,11 +82,11 @@ const state = {
   vaultKey: null,       // Uint8Array(32) — never persisted
   vaultItems: [],       // decrypted: [{id, label, key, notes, tags, pinned, createdAt, updatedAt}]
   history: [],          // decrypted: [{id, op, preview, createdAt}]
-  users: [],            // public directory: [{id, email}]
   threads: [],          // [{peerId, peerEmail, unread, lastAt}]
+  groups: [],           // [{id, name, salt, wrappedKey, key (hex), unread, lastAt}]
   messages: [],         // raw messages for active thread
-  activeThread: null,   // {peerId, peerEmail}
-  threadKeyCache: {},   // peerId → vault item used last to decrypt
+  activeThread: null,   // {kind:'dm', peerId, peerEmail} | {kind:'group', groupId, name, key}
+  threadKeyCache: {},   // peerId → vault item used last to decrypt (DM only)
   route: "cipher",
   cipherMode: "encrypt",
   showKey: false,
@@ -99,7 +100,7 @@ function setView(name) {
 function setRoute(r) {
   state.route = r;
   for (const t of $$("#main-tabs .tab")) t.classList.toggle("active", t.dataset.route === r);
-  for (const p of ["cipher", "vault", "history", "settings"]) {
+  for (const p of ["cipher", "vault", "messages", "history", "settings"]) {
     $(`tab-${p}`).classList.toggle("hidden", p !== r);
     $(`tab-${p}`).classList.toggle("active", p === r);
   }
@@ -252,8 +253,8 @@ function hardLock() {
   state.vaultKey = null;
   state.vaultItems = [];
   state.history = [];
-  state.users = [];
   state.threads = [];
+  state.groups = [];
   state.messages = [];
   state.activeThread = null;
   state.threadKeyCache = {};
@@ -850,7 +851,7 @@ $("delete-account-form").addEventListener("submit", async (e) => {
 for (const t of $$("#main-tabs .tab")) t.addEventListener("click", () => setRoute(t.dataset.route));
 window.addEventListener("hashchange", () => {
   const r = location.hash.slice(1);
-  if (["cipher","vault","history","settings"].includes(r)) setRoute(r);
+  if (["cipher","vault","messages","history","settings"].includes(r)) setRoute(r);
 });
 
 // ─── Keyboard shortcuts ────────────────────────────────────────
@@ -872,6 +873,8 @@ document.addEventListener("keydown", (e) => {
 const msgEls = {
   threads: $("msg-threads"),
   threadsEmpty: $("msg-threads-empty"),
+  groups: $("msg-groups"),
+  groupsEmpty: $("msg-groups-empty"),
   header: $("msg-header"),
   list: $("msg-list"),
   compose: $("msg-compose"),
@@ -879,34 +882,44 @@ const msgEls = {
   key: $("msg-key"),
   keySource: $("msg-key-source"),
   keyShow: $("msg-key-show"),
+  keyRow: document.querySelector(".msg-compose-keyrow"),
   hint: $("msg-hint"),
   unreadBadge: $("msg-unread"),
   newBtn: $("msg-new"),
   modal: $("new-msg-modal"),
-  recipient: $("nm-recipient"),
 };
 
-async function loadUsers() {
-  state.users = await api.get("/api/users");
-}
 
 async function loadThreads() {
   if (!state.vaultKey) return;
   try {
-    [state.users, state.threads] = await Promise.all([
-      api.get("/api/users"),
+    const [threads, groups] = await Promise.all([
       api.get("/api/messages/threads"),
+      api.get("/api/groups"),
     ]);
+    state.threads = threads;
+    // Decrypt each group's wrapped key so we can use it for messages.
+    state.groups = [];
+    for (const g of groups) {
+      let key = null;
+      try {
+        const raw = await openBytes(g.wrappedKey, state.vaultKey);
+        key = bytesToHex(raw);
+      } catch {}
+      state.groups.push({ ...g, key });
+    }
     renderThreads();
+    renderGroups();
     updateUnreadBadge();
-  } catch (e) { toast(e.message || "Failed to load threads", "error"); }
+  } catch (e) { toast(e.message || "Failed to load conversations", "error"); }
 }
 
 function renderThreads() {
-  const empty = state.threads.length === 0;
-  msgEls.threadsEmpty.classList.toggle("hidden", !empty);
+  const active = state.activeThread;
+  const isActive = (peerId) => active?.kind === "dm" && active.peerId === peerId;
+  msgEls.threadsEmpty.classList.toggle("hidden", state.threads.length > 0);
   msgEls.threads.innerHTML = state.threads.map(t => `
-    <div class="msg-thread ${state.activeThread?.peerId === t.peerId ? 'active' : ''}" data-peer="${t.peerId}">
+    <div class="msg-thread ${isActive(t.peerId) ? 'active' : ''}" data-peer="${t.peerId}">
       <div class="t-row">
         <span class="t-email">${escapeHtml(t.peerEmail)}</span>
         ${t.unread > 0 ? `<span class="t-unread">${t.unread}</span>` : ""}
