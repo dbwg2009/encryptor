@@ -541,6 +541,7 @@ function renderVault() {
       <div class="vi-actions">
         <button class="icon-btn" data-act="use">use</button>
         <button class="icon-btn" data-act="copy">copy</button>
+        <button class="icon-btn" data-act="pin">${it.pinned ? "unpin" : "pin"}</button>
         <button class="icon-btn" data-act="edit">edit</button>
         <button class="icon-btn" data-act="del">delete</button>
       </div>
@@ -557,6 +558,20 @@ function renderVault() {
     el.querySelector('[data-act="copy"]').addEventListener("click", async () => {
       const it = state.vaultItems.find(x => x.id === id);
       if (it) { await navigator.clipboard.writeText(it.key); toast("Key copied", "info", "✓"); }
+    });
+    el.querySelector('[data-act="pin"]').addEventListener("click", async () => {
+      const it = state.vaultItems.find(x => x.id === id);
+      if (!it) return;
+      try {
+        const labelCt = await sealString(it.label, state.vaultKey);
+        const payloadCt = await sealJson({ key: it.key, notes: it.notes, tags: it.tags }, state.vaultKey);
+        const r = await api.put(`/api/vault/${id}`, { labelCt, payloadCt, pinned: !it.pinned });
+        it.pinned = !it.pinned;
+        it.updatedAt = r.updatedAt;
+        renderVault();
+        refreshKeySource();
+        toast(it.pinned ? "Pinned" : "Unpinned", "info");
+      } catch (err) { toast(err.message || "Could not update", "error"); }
     });
     el.querySelector('[data-act="edit"]').addEventListener("click", () => {
       const it = state.vaultItems.find(x => x.id === id);
@@ -897,15 +912,22 @@ async function loadThreads() {
       api.get("/api/groups"),
     ]);
     state.threads = threads;
-    // Decrypt each group's wrapped key so we can use it for messages.
     state.groups = [];
     for (const g of groups) {
-      let key = null;
+      let key = null, passcode = null;
       try {
         const raw = await openBytes(g.wrappedKey, state.vaultKey);
-        key = bytesToHex(raw);
+        try {
+          const obj = JSON.parse(new TextDecoder().decode(raw));
+          if (obj && typeof obj === "object" && obj.key) {
+            key = obj.key;
+            passcode = obj.passcode || null;
+          }
+        } catch {
+          if (raw.length === 32) key = bytesToHex(raw);
+        }
       } catch {}
-      state.groups.push({ ...g, key });
+      state.groups.push({ ...g, key, passcode });
     }
     renderThreads();
     renderGroups();
@@ -988,7 +1010,11 @@ async function openGroupThread(groupId) {
   `;
   $("msg-refresh").addEventListener("click", () => loadGroupMessages(groupId));
   $("msg-share-code").addEventListener("click", async () => {
-    const code = `${groupId}:${g.key}`;
+    if (!g.passcode) {
+      toast("Original passcode unavailable for this group — recreate it to share a join code.", "error", null, 5000);
+      return;
+    }
+    const code = `${groupId}:${g.passcode}`;
     try { await navigator.clipboard.writeText(code); toast("Join code copied", "info", "✓"); }
     catch { toast(code, "info", "Join code", 6000); }
   });
@@ -1285,11 +1311,12 @@ $("nm-create-go").addEventListener("click", async () => {
     const saltBytes = crypto.getRandomValues(new Uint8Array(16));
     const saltHex = bytesToHex(saltBytes);
     const { authHash, vaultKey: groupKey } = await deriveGroupAuth(passcode, saltHex);
-    const wrappedKey = await sealBytes(groupKey, state.vaultKey);
+    const keyHex = bytesToHex(groupKey);
+    const wrappedKey = await sealJson({ passcode, key: keyHex }, state.vaultKey);
     const r = await api.post("/api/groups", { name, salt: saltHex, authHash, wrappedKey });
     state.groups.unshift({
       id: r.id, name: r.name, salt: saltHex, wrappedKey,
-      key: bytesToHex(groupKey), unread: 0, lastAt: null,
+      key: keyHex, passcode, unread: 0, lastAt: null,
     });
     renderGroups();
     const code = `${r.id}:${passcode}`;
@@ -1316,16 +1343,18 @@ $("nm-join-go").addEventListener("click", async () => {
     busy("Joining…");
     const pre = await api.get(`/api/groups/${groupId}/preflight`);
     const { authHash, vaultKey: groupKey } = await deriveGroupAuth(passcode, pre.salt);
-    const wrappedKey = await sealBytes(groupKey, state.vaultKey);
+    const keyHex = bytesToHex(groupKey);
+    const wrappedKey = await sealJson({ passcode, key: keyHex }, state.vaultKey);
     await api.post(`/api/groups/${groupId}/join`, { authHash, wrappedKey });
     const existing = state.groups.find(g => g.id === groupId);
     if (existing) {
-      existing.key = bytesToHex(groupKey);
+      existing.key = keyHex;
+      existing.passcode = passcode;
       existing.wrappedKey = wrappedKey;
     } else {
       state.groups.unshift({
         id: groupId, name: pre.name, salt: pre.salt, wrappedKey,
-        key: bytesToHex(groupKey), unread: 0, lastAt: null,
+        key: keyHex, passcode, unread: 0, lastAt: null,
       });
     }
     renderGroups();
