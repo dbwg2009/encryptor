@@ -87,6 +87,7 @@ const state = {
   messages: [],         // raw messages for active thread
   activeThread: null,   // {kind:'dm', peerId, peerEmail} | {kind:'group', groupId, name, key}
   threadKeyCache: {},   // peerId → vault item used last to decrypt (DM only)
+  replyingTo: null,     // {id, preview} if replying to a message
   route: "cipher",
   cipherMode: "encrypt",
   showKey: false,
@@ -1110,11 +1111,15 @@ function renderBubble(m, decrypted, side, opts = {}) {
   const body = decrypted.ok
     ? `<div>${escapeHtml(decrypted.text)}</div>`
     : `<div>🔒 ${escapeHtml(m.ciphertext.slice(0, 80))}…</div>`;
+  const replyIndicator = m.replyToId ? `<div class="b-reply-indicator">↳ reply to message</div>` : "";
   return `
-    <div class="msg-bubble ${side} ${decrypted.ok ? "" : "encrypted"}" data-id="${m.id}">
-      ${sender}${hint}${body}
+    <div class="msg-bubble ${side} ${decrypted.ok ? "" : "encrypted"}" data-id="${m.id}" data-reply-to="${m.replyToId || ""}">
+      ${sender}${replyIndicator}${hint}${body}
       <div class="b-meta">${meta}</div>
-      <div class="b-actions"><button data-act="del">delete</button></div>
+      <div class="b-actions">
+        <button data-act="reply">reply</button>
+        <button data-act="del">delete</button>
+      </div>
     </div>`;
 }
 
@@ -1166,6 +1171,38 @@ function bindBubbleDelete(deleteFn) {
         else await renderGroupMessages();
       } catch (err) { toast(err.message, "error"); }
     });
+    el.querySelector('[data-act="reply"]')?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = Number(el.dataset.id);
+      const msg = state.messages.find(x => x.id === id);
+      if (!msg) return;
+
+      // Try to decrypt for preview
+      let preview = "message";
+      if (state.activeThread.kind === "dm") {
+        const r = await tryDecryptDm(msg.ciphertext, state.activeThread.peerId);
+        if (r.ok) preview = r.text.slice(0, 50);
+      } else {
+        const r = await decryptToken(msg.ciphertext, state.activeThread.key);
+        if (r.ok) preview = r.text.slice(0, 50);
+      }
+
+      state.replyingTo = { id, preview };
+      renderReplyIndicator();
+      setTimeout(() => msgEls.body.focus(), 50);
+    });
+  }
+}
+
+function renderReplyIndicator() {
+  const indicator = document.getElementById("msg-reply-indicator");
+  if (!state.replyingTo) {
+    if (indicator) indicator.style.display = "none";
+    return;
+  }
+  if (indicator) {
+    indicator.style.display = "";
+    indicator.textContent = `↳ Reply to: ${escapeHtml(state.replyingTo.preview)}`;
   }
 }
 
@@ -1218,6 +1255,7 @@ msgEls.compose.addEventListener("submit", async (e) => {
   const body = msgEls.body.value.trim();
   if (!body) return;
   const hint = msgEls.hint.value.trim();
+  const replyToId = state.replyingTo?.id || undefined;
   try {
     if (state.activeThread.kind === "dm") {
       const key = msgEls.key.value;
@@ -1227,6 +1265,7 @@ msgEls.compose.addEventListener("submit", async (e) => {
         recipientId: state.activeThread.peerId,
         ciphertext,
         hint: hint || undefined,
+        replyToId,
       });
       const sel = msgEls.keySource.value;
       if (sel !== "custom") {
@@ -1234,14 +1273,19 @@ msgEls.compose.addEventListener("submit", async (e) => {
         if (it) state.threadKeyCache[state.activeThread.peerId] = it;
       }
       msgEls.body.value = "";
+      state.replyingTo = null;
+      renderReplyIndicator();
       await loadDmMessages(state.activeThread.peerId);
     } else {
       const ciphertext = await encryptText(body, state.activeThread.key);
       await api.post(`/api/groups/${state.activeThread.groupId}/messages`, {
         ciphertext,
         hint: hint || undefined,
+        replyToId,
       });
       msgEls.body.value = "";
+      state.replyingTo = null;
+      renderReplyIndicator();
       await loadGroupMessages(state.activeThread.groupId);
     }
   } catch (err) { toast(err.message || "Send failed", "error"); }

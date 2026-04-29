@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS messages (
   recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   ciphertext TEXT NOT NULL,
   hint TEXT,
+  reply_to_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
   created_at INTEGER NOT NULL,
   read_at INTEGER,
   deleted_by_sender INTEGER NOT NULL DEFAULT 0,
@@ -125,6 +126,7 @@ CREATE TABLE IF NOT EXISTS group_messages (
   sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   ciphertext TEXT NOT NULL,
   hint TEXT,
+  reply_to_id INTEGER REFERENCES group_messages(id) ON DELETE SET NULL,
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at DESC);
@@ -298,6 +300,7 @@ class MessageIn(BaseModel):
     recipientId: int
     ciphertext: str = Field(min_length=1, max_length=131072)
     hint: Optional[str] = Field(default=None, max_length=120)
+    replyToId: Optional[int] = None
 
 
 class LookupIn(BaseModel):
@@ -319,6 +322,7 @@ class GroupJoinIn(BaseModel):
 class GroupMessageIn(BaseModel):
     ciphertext: str = Field(min_length=1, max_length=131072)
     hint: Optional[str] = Field(default=None, max_length=120)
+    replyToId: Optional[int] = None
 
 
 class PushSubscriptionIn(BaseModel):
@@ -665,6 +669,27 @@ def messages_list(peer: int, limit: int = 200, user = Depends(require_user)):
     } for r in rows]
 
 
+async def send_push_notifications(recipient_id: int, title: str, body: str, url: str = "/"):
+    """Send push notifications to all subscriptions for a user"""
+    import json
+    with db() as conn:
+        subs = conn.execute(
+            "SELECT subscription_json FROM push_subscriptions WHERE user_id = ?",
+            (recipient_id,)
+        ).fetchall()
+    # In a real implementation, you would send HTTP POST requests to each subscription endpoint
+    # For now, this just logs that notifications would be sent
+    for sub in subs:
+        try:
+            sub_data = json.loads(sub[0])
+            # A full implementation would use the `web-push` library or similar
+            # to send encrypted push messages to the push service endpoint
+            # For demo: web-push send would happen here
+            print(f"Would send push notification: {title} - {body}")
+        except Exception as e:
+            print(f"Error processing push subscription: {e}")
+
+
 @app.post("/api/messages", status_code=201)
 def message_send(body: MessageIn, user = Depends(auth_dep)):
     if body.recipientId == user["id"]:
@@ -675,9 +700,20 @@ def message_send(body: MessageIn, user = Depends(auth_dep)):
             raise HTTPException(404, "Recipient not found")
         now = int(time.time())
         cur = conn.execute(
-            "INSERT INTO messages (sender_id, recipient_id, ciphertext, hint, created_at) VALUES (?,?,?,?,?)",
-            (user["id"], body.recipientId, body.ciphertext, body.hint, now)
+            "INSERT INTO messages (sender_id, recipient_id, ciphertext, hint, reply_to_id, created_at) VALUES (?,?,?,?,?,?)",
+            (user["id"], body.recipientId, body.ciphertext, body.hint, body.replyToId, now)
         )
+    # Queue push notification for recipient (fire and forget)
+    import asyncio
+    try:
+        asyncio.create_task(send_push_notifications(
+            body.recipientId,
+            f"Message from {user['email']}",
+            body.hint or body.ciphertext[:50],
+            f"/?thread={user['id']}"
+        ))
+    except:
+        pass  # Notification failure shouldn't fail the message send
     return {"id": cur.lastrowid, "createdAt": now}
 
 
@@ -862,7 +898,7 @@ def group_messages_list(group_id: int, limit: int = 200, user = Depends(require_
     with db() as conn:
         _require_group_member(conn, group_id, user["id"])
         rows = conn.execute("""
-            SELECT id, sender_id, ciphertext, hint, created_at
+            SELECT id, sender_id, ciphertext, hint, reply_to_id, created_at
               FROM group_messages
              WHERE group_id = ?
              ORDER BY created_at DESC
@@ -881,6 +917,7 @@ def group_messages_list(group_id: int, limit: int = 200, user = Depends(require_
         "senderEmail": emails.get(r["sender_id"]),
         "ciphertext": r["ciphertext"],
         "hint": r["hint"],
+        "replyToId": r["reply_to_id"],
         "createdAt": r["created_at"],
     } for r in rows]
 
@@ -891,9 +928,28 @@ def group_message_send(group_id: int, body: GroupMessageIn, user = Depends(auth_
         _require_group_member(conn, group_id, user["id"])
         now = int(time.time())
         cur = conn.execute(
-            "INSERT INTO group_messages (group_id, sender_id, ciphertext, hint, created_at) VALUES (?,?,?,?,?)",
-            (group_id, user["id"], body.ciphertext, body.hint, now)
+            "INSERT INTO group_messages (group_id, sender_id, ciphertext, hint, reply_to_id, created_at) VALUES (?,?,?,?,?,?)",
+            (group_id, user["id"], body.ciphertext, body.hint, body.replyToId, now)
         )
+        # Get all group members to notify
+        members = conn.execute(
+            "SELECT user_id FROM group_members WHERE group_id = ? AND user_id != ?",
+            (group_id, user["id"])
+        ).fetchall()
+
+    # Send push notifications to other group members
+    import asyncio
+    for member in members:
+        try:
+            asyncio.create_task(send_push_notifications(
+                member["user_id"],
+                f"New group message",
+                body.hint or body.ciphertext[:50],
+                f"/?group={group_id}"
+            ))
+        except:
+            pass
+
     return {"id": cur.lastrowid, "createdAt": now}
 
 

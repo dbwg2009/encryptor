@@ -795,11 +795,42 @@ a { color: var(--accent-hi); }
   font-family: var(--mono);
   letter-spacing: 0.02em;
 }
+.msg-reply-indicator {
+  padding: 8px 10px;
+  background: rgba(100, 200, 100, 0.1);
+  border-left: 3px solid var(--accent);
+  font-size: 12px;
+  color: var(--accent);
+  font-family: var(--mono);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.msg-reply-indicator.hidden {
+  display: none;
+}
+.b-reply-indicator {
+  font-size: 10px;
+  color: var(--accent);
+  font-family: var(--mono);
+  margin-bottom: 4px;
+  opacity: 0.8;
+}
 
 @media (max-width: 800px) {
   .msg-layout { grid-template-columns: 1fr; }
   .msg-sidebar { min-height: 200px; max-height: 280px; }
   .msg-main { min-height: 50vh; }
+  .msg-bubble { max-width: 85%; }
+}
+
+@media (max-width: 500px) {
+  .msg-bubble { max-width: 95%; }
+  .msg-compose-keyrow { flex-direction: column; }
+  .msg-compose-keyrow .select, .msg-compose-keyrow input { width: 100%; min-width: auto; }
+  .msg-compose-row { flex-direction: column; }
+  .msg-compose-row textarea { width: 100%; }
+  .msg-compose-row button { width: 100%; }
 }
 
 /* ── Responsive ──────────────────────────────────────────── */
