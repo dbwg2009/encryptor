@@ -5,8 +5,9 @@
 
 import {
   encryptText, decryptToken,
-  deriveAuthAndVault,
+  deriveAuthAndVault, deriveGroupAuth,
   sealJson, openJson, sealString, openString,
+  sealBytes, openBytes,
   generatePassphrase, passwordStrength,
   bytesToHex,
 } from "./crypto.js";
@@ -81,11 +82,11 @@ const state = {
   vaultKey: null,       // Uint8Array(32) — never persisted
   vaultItems: [],       // decrypted: [{id, label, key, notes, tags, pinned, createdAt, updatedAt}]
   history: [],          // decrypted: [{id, op, preview, createdAt}]
-  users: [],            // public directory: [{id, email}]
   threads: [],          // [{peerId, peerEmail, unread, lastAt}]
+  groups: [],           // [{id, name, salt, wrappedKey, key (hex), unread, lastAt}]
   messages: [],         // raw messages for active thread
-  activeThread: null,   // {peerId, peerEmail}
-  threadKeyCache: {},   // peerId → vault item used last to decrypt
+  activeThread: null,   // {kind:'dm', peerId, peerEmail} | {kind:'group', groupId, name, key}
+  threadKeyCache: {},   // peerId → vault item used last to decrypt (DM only)
   route: "cipher",
   cipherMode: "encrypt",
   showKey: false,
@@ -99,7 +100,7 @@ function setView(name) {
 function setRoute(r) {
   state.route = r;
   for (const t of $$("#main-tabs .tab")) t.classList.toggle("active", t.dataset.route === r);
-  for (const p of ["cipher", "vault", "history", "settings"]) {
+  for (const p of ["cipher", "vault", "messages", "history", "settings"]) {
     $(`tab-${p}`).classList.toggle("hidden", p !== r);
     $(`tab-${p}`).classList.toggle("active", p === r);
   }
@@ -252,8 +253,8 @@ function hardLock() {
   state.vaultKey = null;
   state.vaultItems = [];
   state.history = [];
-  state.users = [];
   state.threads = [];
+  state.groups = [];
   state.messages = [];
   state.activeThread = null;
   state.threadKeyCache = {};
@@ -540,6 +541,7 @@ function renderVault() {
       <div class="vi-actions">
         <button class="icon-btn" data-act="use">use</button>
         <button class="icon-btn" data-act="copy">copy</button>
+        <button class="icon-btn" data-act="pin">${it.pinned ? "unpin" : "pin"}</button>
         <button class="icon-btn" data-act="edit">edit</button>
         <button class="icon-btn" data-act="del">delete</button>
       </div>
@@ -556,6 +558,20 @@ function renderVault() {
     el.querySelector('[data-act="copy"]').addEventListener("click", async () => {
       const it = state.vaultItems.find(x => x.id === id);
       if (it) { await navigator.clipboard.writeText(it.key); toast("Key copied", "info", "✓"); }
+    });
+    el.querySelector('[data-act="pin"]').addEventListener("click", async () => {
+      const it = state.vaultItems.find(x => x.id === id);
+      if (!it) return;
+      try {
+        const labelCt = await sealString(it.label, state.vaultKey);
+        const payloadCt = await sealJson({ key: it.key, notes: it.notes, tags: it.tags }, state.vaultKey);
+        const r = await api.put(`/api/vault/${id}`, { labelCt, payloadCt, pinned: !it.pinned });
+        it.pinned = !it.pinned;
+        it.updatedAt = r.updatedAt;
+        renderVault();
+        refreshKeySource();
+        toast(it.pinned ? "Pinned" : "Unpinned", "info");
+      } catch (err) { toast(err.message || "Could not update", "error"); }
     });
     el.querySelector('[data-act="edit"]').addEventListener("click", () => {
       const it = state.vaultItems.find(x => x.id === id);
@@ -850,7 +866,7 @@ $("delete-account-form").addEventListener("submit", async (e) => {
 for (const t of $$("#main-tabs .tab")) t.addEventListener("click", () => setRoute(t.dataset.route));
 window.addEventListener("hashchange", () => {
   const r = location.hash.slice(1);
-  if (["cipher","vault","history","settings"].includes(r)) setRoute(r);
+  if (["cipher","vault","messages","history","settings"].includes(r)) setRoute(r);
 });
 
 // ─── Keyboard shortcuts ────────────────────────────────────────
@@ -872,6 +888,8 @@ document.addEventListener("keydown", (e) => {
 const msgEls = {
   threads: $("msg-threads"),
   threadsEmpty: $("msg-threads-empty"),
+  groups: $("msg-groups"),
+  groupsEmpty: $("msg-groups-empty"),
   header: $("msg-header"),
   list: $("msg-list"),
   compose: $("msg-compose"),
@@ -879,71 +897,157 @@ const msgEls = {
   key: $("msg-key"),
   keySource: $("msg-key-source"),
   keyShow: $("msg-key-show"),
+  keyRow: document.querySelector(".msg-compose-keyrow"),
   hint: $("msg-hint"),
   unreadBadge: $("msg-unread"),
   newBtn: $("msg-new"),
   modal: $("new-msg-modal"),
-  recipient: $("nm-recipient"),
 };
-
-async function loadUsers() {
-  state.users = await api.get("/api/users");
-}
 
 async function loadThreads() {
   if (!state.vaultKey) return;
   try {
-    [state.users, state.threads] = await Promise.all([
-      api.get("/api/users"),
+    const [threads, groups] = await Promise.all([
       api.get("/api/messages/threads"),
+      api.get("/api/groups"),
     ]);
+    state.threads = threads;
+    state.groups = [];
+    for (const g of groups) {
+      let key = null, passcode = null;
+      try {
+        const raw = await openBytes(g.wrappedKey, state.vaultKey);
+        try {
+          const obj = JSON.parse(new TextDecoder().decode(raw));
+          if (obj && typeof obj === "object" && obj.key) {
+            key = obj.key;
+            passcode = obj.passcode || null;
+          }
+        } catch {
+          if (raw.length === 32) key = bytesToHex(raw);
+        }
+      } catch {}
+      state.groups.push({ ...g, key, passcode });
+    }
     renderThreads();
+    renderGroups();
     updateUnreadBadge();
-  } catch (e) { toast(e.message || "Failed to load threads", "error"); }
+  } catch (e) { toast(e.message || "Failed to load conversations", "error"); }
 }
 
 function renderThreads() {
-  const empty = state.threads.length === 0;
-  msgEls.threadsEmpty.classList.toggle("hidden", !empty);
+  const active = state.activeThread;
+  const isActive = (peerId) => active?.kind === "dm" && active.peerId === peerId;
+  msgEls.threadsEmpty.classList.toggle("hidden", state.threads.length > 0);
   msgEls.threads.innerHTML = state.threads.map(t => `
-    <div class="msg-thread ${state.activeThread?.peerId === t.peerId ? 'active' : ''}" data-peer="${t.peerId}">
+    <div class="msg-thread ${isActive(t.peerId) ? 'active' : ''}" data-peer="${t.peerId}">
       <div class="t-row">
         <span class="t-email">${escapeHtml(t.peerEmail)}</span>
         ${t.unread > 0 ? `<span class="t-unread">${t.unread}</span>` : ""}
       </div>
-      <div class="t-row">
-        <span class="t-time">${t.lastAt ? fmtTime(t.lastAt) : "—"}</span>
-      </div>
+      <div class="t-row"><span class="t-time">${t.lastAt ? fmtTime(t.lastAt) : "—"}</span></div>
     </div>
   `).join("");
   for (const el of msgEls.threads.querySelectorAll(".msg-thread")) {
-    el.addEventListener("click", () => openThread(Number(el.dataset.peer)));
+    el.addEventListener("click", () => openDmThread(Number(el.dataset.peer)));
   }
 }
 
-async function openThread(peerId) {
-  const peer = state.users.find(u => u.id === peerId)
-            || state.threads.find(t => t.peerId === peerId);
-  if (!peer) return;
-  state.activeThread = { peerId, peerEmail: peer.email || peer.peerEmail };
+function renderGroups() {
+  const active = state.activeThread;
+  const isActive = (id) => active?.kind === "group" && active.groupId === id;
+  msgEls.groupsEmpty.classList.toggle("hidden", state.groups.length > 0);
+  msgEls.groups.innerHTML = state.groups.map(g => `
+    <div class="msg-thread ${isActive(g.id) ? 'active' : ''}" data-group="${g.id}">
+      <div class="t-row">
+        <span class="t-email">⌘ ${escapeHtml(g.name)}</span>
+        ${g.unread > 0 ? `<span class="t-unread">${g.unread}</span>` : ""}
+      </div>
+      <div class="t-row"><span class="t-time">${g.lastAt ? fmtTime(g.lastAt) : "—"}</span></div>
+    </div>
+  `).join("");
+  for (const el of msgEls.groups.querySelectorAll(".msg-thread")) {
+    el.addEventListener("click", () => openGroupThread(Number(el.dataset.group)));
+  }
+}
+
+async function openDmThread(peerId) {
+  const t = state.threads.find(x => x.peerId === peerId);
+  const peerEmail = t?.peerEmail || state.activeThread?.peerEmail || "";
+  state.activeThread = { kind: "dm", peerId, peerEmail };
   msgEls.header.innerHTML = `
     <div>
-      <div class="h-email">${escapeHtml(state.activeThread.peerEmail)}</div>
-      <div class="h-meta">end-to-end · key never leaves your browser</div>
+      <div class="h-email">${escapeHtml(peerEmail)}</div>
+      <div class="h-meta">direct · end-to-end · key never leaves your browser</div>
     </div>
     <button class="icon-btn" id="msg-refresh" type="button">refresh</button>
   `;
-  $("msg-refresh").addEventListener("click", () => loadMessages(peerId));
+  $("msg-refresh").addEventListener("click", () => loadDmMessages(peerId));
   msgEls.compose.classList.remove("hidden");
+  msgEls.keyRow.classList.remove("hidden");
   refreshMsgKeySource();
-  await loadMessages(peerId);
+  renderThreads();
+  renderGroups();
+  await loadDmMessages(peerId);
   setTimeout(() => msgEls.body.focus(), 50);
 }
 
-async function loadMessages(peerId) {
+async function openGroupThread(groupId) {
+  const g = state.groups.find(x => x.id === groupId);
+  if (!g) return;
+  if (!g.key) { toast("Could not unwrap this group's key — re-join with the code.", "error"); return; }
+  state.activeThread = { kind: "group", groupId, name: g.name, key: g.key };
+  msgEls.header.innerHTML = `
+    <div>
+      <div class="h-email">⌘ ${escapeHtml(g.name)}</div>
+      <div class="h-meta">group · encrypted with shared join code</div>
+    </div>
+    <div style="display:flex;gap:6px;">
+      <button class="icon-btn" id="msg-refresh" type="button">refresh</button>
+      <button class="icon-btn" id="msg-share-code" type="button">share code</button>
+      <button class="icon-btn" id="msg-leave-group" type="button">leave</button>
+    </div>
+  `;
+  $("msg-refresh").addEventListener("click", () => loadGroupMessages(groupId));
+  $("msg-share-code").addEventListener("click", async () => {
+    if (!g.passcode) {
+      toast("Original passcode unavailable for this group — recreate it to share a join code.", "error", null, 5000);
+      return;
+    }
+    const code = `${groupId}:${g.passcode}`;
+    try { await navigator.clipboard.writeText(code); toast("Join code copied", "info", "✓"); }
+    catch { toast(code, "info", "Join code", 6000); }
+  });
+  $("msg-leave-group").addEventListener("click", async () => {
+    const ok = await confirmDialog({
+      title: "Leave group?",
+      body: `You will lose access to "${g.name}". You can rejoin later if you still have the join code.`,
+      okText: "Leave",
+    });
+    if (!ok) return;
+    try {
+      await api.post(`/api/groups/${groupId}/leave`);
+      state.groups = state.groups.filter(x => x.id !== groupId);
+      state.activeThread = null;
+      msgEls.header.innerHTML = `<div class="muted small">Pick a conversation or start a new one.</div>`;
+      msgEls.compose.classList.add("hidden");
+      msgEls.list.innerHTML = `<div class="empty" style="padding:60px 20px;"><p>No conversation selected</p></div>`;
+      renderGroups();
+      toast("Left group", "info");
+    } catch (err) { toast(err.message || "Failed to leave", "error"); }
+  });
+  msgEls.compose.classList.remove("hidden");
+  msgEls.keyRow.classList.add("hidden"); // group key is fixed
+  renderThreads();
+  renderGroups();
+  await loadGroupMessages(groupId);
+  setTimeout(() => msgEls.body.focus(), 50);
+}
+
+async function loadDmMessages(peerId) {
   try {
     state.messages = await api.get(`/api/messages?peer=${peerId}&limit=200`);
-    await renderMessages();
+    await renderDmMessages();
     for (const m of state.messages) {
       if (!m.fromMe && !m.readAt) {
         try { await api.post(`/api/messages/${m.id}/read`); } catch {}
@@ -957,14 +1061,26 @@ async function loadMessages(peerId) {
   }
 }
 
-async function tryDecrypt(ciphertext, peerId) {
-  // 1. Try cached key first (fast path).
+async function loadGroupMessages(groupId) {
+  try {
+    state.messages = await api.get(`/api/groups/${groupId}/messages?limit=200`);
+    await renderGroupMessages();
+    try { await api.post(`/api/groups/${groupId}/read`); } catch {}
+    const g = state.groups.find(x => x.id === groupId);
+    if (g) g.unread = 0;
+    renderGroups();
+    updateUnreadBadge();
+  } catch (e) {
+    msgEls.list.innerHTML = `<p class="form-error" style="margin:20px;">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function tryDecryptDm(ciphertext, peerId) {
   const cached = state.threadKeyCache[peerId];
   if (cached) {
     const r = await decryptToken(ciphertext, cached.key);
     if (r.ok) return { ok: true, text: r.text, keyLabel: cached.label };
   }
-  // 2. Try every vault key.
   for (const k of state.vaultItems) {
     if (cached && k.id === cached.id) continue;
     const r = await decryptToken(ciphertext, k.key);
@@ -973,7 +1089,6 @@ async function tryDecrypt(ciphertext, peerId) {
       return { ok: true, text: r.text, keyLabel: k.label };
     }
   }
-  // 3. Try the key currently in the compose box.
   const liveKey = msgEls.key.value;
   if (liveKey) {
     const r = await decryptToken(ciphertext, liveKey);
@@ -982,56 +1097,72 @@ async function tryDecrypt(ciphertext, peerId) {
   return { ok: false };
 }
 
-async function renderMessages() {
+function renderBubble(m, decrypted, side, opts = {}) {
+  const meta = decrypted.ok
+    ? `<span>${escapeHtml(opts.label || decrypted.keyLabel || "key")}</span><span>·</span><span>${fmtTime(m.createdAt)}</span>`
+    : `<span>can't decrypt</span><span>·</span><span>${fmtTime(m.createdAt)}</span>`;
+  const sender = opts.sender ? `<div class="b-hint">${escapeHtml(opts.sender)}</div>` : "";
+  const hint = m.hint ? `<div class="b-hint">hint: ${escapeHtml(m.hint)}</div>` : "";
+  const body = decrypted.ok
+    ? `<div>${escapeHtml(decrypted.text)}</div>`
+    : `<div>🔒 ${escapeHtml(m.ciphertext.slice(0, 80))}…</div>`;
+  return `
+    <div class="msg-bubble ${side} ${decrypted.ok ? "" : "encrypted"}" data-id="${m.id}">
+      ${sender}${hint}${body}
+      <div class="b-meta">${meta}</div>
+      <div class="b-actions"><button data-act="del">delete</button></div>
+    </div>`;
+}
+
+async function renderDmMessages() {
   if (state.messages.length === 0) {
     msgEls.list.innerHTML = `<div class="empty" style="padding:40px 20px;"><p>No messages yet</p><p class="muted small">Send the first one ↓</p></div>`;
     return;
   }
-  const ordered = state.messages.slice().reverse();   // oldest → newest
-  const decrypted = [];
+  const ordered = state.messages.slice().reverse();
+  const html = [];
   for (const m of ordered) {
-    const r = await tryDecrypt(m.ciphertext, state.activeThread.peerId);
-    decrypted.push({ ...m, decrypted: r });
+    const r = await tryDecryptDm(m.ciphertext, state.activeThread.peerId);
+    html.push(renderBubble(m, r, m.fromMe ? "from-me" : "from-them", { label: r.ok ? `★ ${r.keyLabel}` : "" }));
   }
-  msgEls.list.innerHTML = decrypted.map(m => {
-    const side = m.fromMe ? "from-me" : "from-them";
-    if (m.decrypted.ok) {
-      return `
-        <div class="msg-bubble ${side}" data-id="${m.id}">
-          ${m.hint ? `<div class="b-hint">hint: ${escapeHtml(m.hint)}</div>` : ""}
-          <div>${escapeHtml(m.decrypted.text)}</div>
-          <div class="b-meta">
-            <span>★ ${escapeHtml(m.decrypted.keyLabel || "key")}</span>
-            <span>·</span>
-            <span>${fmtTime(m.createdAt)}</span>
-          </div>
-          <div class="b-actions"><button data-act="del">delete</button></div>
-        </div>`;
-    }
-    return `
-      <div class="msg-bubble ${side} encrypted" data-id="${m.id}">
-        ${m.hint ? `<div class="b-hint">hint: ${escapeHtml(m.hint)}</div>` : ""}
-        <div>🔒 ${escapeHtml(m.ciphertext.slice(0, 80))}…</div>
-        <div class="b-meta">
-          <span>no matching key in vault</span>
-          <span>·</span>
-          <span>${fmtTime(m.createdAt)}</span>
-        </div>
-        <div class="b-actions"><button data-act="del">delete</button></div>
-      </div>`;
-  }).join("");
+  msgEls.list.innerHTML = html.join("");
+  bindBubbleDelete((id) => api.del(`/api/messages/${id}`));
+  msgEls.list.scrollTop = msgEls.list.scrollHeight;
+}
+
+async function renderGroupMessages() {
+  if (state.messages.length === 0) {
+    msgEls.list.innerHTML = `<div class="empty" style="padding:40px 20px;"><p>No messages yet</p><p class="muted small">Send the first one ↓</p></div>`;
+    return;
+  }
+  const groupKey = state.activeThread.key;
+  const ordered = state.messages.slice().reverse();
+  const html = [];
+  for (const m of ordered) {
+    const r = await decryptToken(m.ciphertext, groupKey);
+    html.push(renderBubble(m, r,
+      m.fromMe ? "from-me" : "from-them",
+      { sender: m.fromMe ? null : (m.senderEmail || "(unknown)") }));
+  }
+  msgEls.list.innerHTML = html.join("");
+  const groupId = state.activeThread.groupId;
+  bindBubbleDelete((id) => api.del(`/api/groups/${groupId}/messages/${id}`));
+  msgEls.list.scrollTop = msgEls.list.scrollHeight;
+}
+
+function bindBubbleDelete(deleteFn) {
   for (const el of msgEls.list.querySelectorAll(".msg-bubble")) {
     el.querySelector('[data-act="del"]')?.addEventListener("click", async (e) => {
       e.stopPropagation();
       const id = Number(el.dataset.id);
       try {
-        await api.del(`/api/messages/${id}`);
+        await deleteFn(id);
         state.messages = state.messages.filter(x => x.id !== id);
-        await renderMessages();
+        if (state.activeThread.kind === "dm") await renderDmMessages();
+        else await renderGroupMessages();
       } catch (err) { toast(err.message, "error"); }
     });
   }
-  msgEls.list.scrollTop = msgEls.list.scrollHeight;
 }
 
 function refreshMsgKeySource() {
@@ -1044,7 +1175,8 @@ function refreshMsgKeySource() {
     opt.textContent = (it.pinned ? "★ " : "") + it.label;
     sel.appendChild(opt);
   }
-  const cached = state.threadKeyCache[state.activeThread?.peerId];
+  const peerId = state.activeThread?.kind === "dm" ? state.activeThread.peerId : null;
+  const cached = peerId != null ? state.threadKeyCache[peerId] : null;
   if (cached && state.vaultItems.some(v => v.id === cached.id)) {
     sel.value = String(cached.id);
     msgEls.key.value = cached.key;
@@ -1052,6 +1184,7 @@ function refreshMsgKeySource() {
     sel.value = cur;
   } else {
     sel.value = "custom";
+    msgEls.key.value = "";
   }
 }
 
@@ -1064,9 +1197,10 @@ msgEls.keySource.addEventListener("change", () => {
     const it = state.vaultItems.find(x => String(x.id) === v);
     if (it) {
       msgEls.key.value = it.key;
-      // If we change keys, drop the cache for this peer so re-decrypt picks up.
-      if (state.activeThread) state.threadKeyCache[state.activeThread.peerId] = it;
-      renderMessages();
+      if (state.activeThread?.kind === "dm") {
+        state.threadKeyCache[state.activeThread.peerId] = it;
+        renderDmMessages();
+      }
     }
   }
 });
@@ -1078,28 +1212,37 @@ msgEls.compose.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!state.activeThread) return;
   const body = msgEls.body.value.trim();
-  const key = msgEls.key.value;
-  const hint = msgEls.hint.value.trim();
   if (!body) return;
-  if (!key) { toast("Pick a vault key or type one", "error"); msgEls.key.focus(); return; }
+  const hint = msgEls.hint.value.trim();
   try {
-    const ciphertext = await encryptText(body, key);
-    await api.post("/api/messages", {
-      recipientId: state.activeThread.peerId,
-      ciphertext,
-      hint: hint || undefined,
-    });
-    msgEls.body.value = "";
-    const sel = msgEls.keySource.value;
-    if (sel !== "custom") {
-      const it = state.vaultItems.find(x => String(x.id) === sel);
-      if (it) state.threadKeyCache[state.activeThread.peerId] = it;
+    if (state.activeThread.kind === "dm") {
+      const key = msgEls.key.value;
+      if (!key) { toast("Pick a vault key or type one", "error"); msgEls.key.focus(); return; }
+      const ciphertext = await encryptText(body, key);
+      await api.post("/api/messages", {
+        recipientId: state.activeThread.peerId,
+        ciphertext,
+        hint: hint || undefined,
+      });
+      const sel = msgEls.keySource.value;
+      if (sel !== "custom") {
+        const it = state.vaultItems.find(x => String(x.id) === sel);
+        if (it) state.threadKeyCache[state.activeThread.peerId] = it;
+      }
+      msgEls.body.value = "";
+      await loadDmMessages(state.activeThread.peerId);
+    } else {
+      const ciphertext = await encryptText(body, state.activeThread.key);
+      await api.post(`/api/groups/${state.activeThread.groupId}/messages`, {
+        ciphertext,
+        hint: hint || undefined,
+      });
+      msgEls.body.value = "";
+      await loadGroupMessages(state.activeThread.groupId);
     }
-    await loadMessages(state.activeThread.peerId);
   } catch (err) { toast(err.message || "Send failed", "error"); }
 });
 
-// Send on Ctrl+Enter inside the body textarea.
 msgEls.body.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
     e.preventDefault();
@@ -1107,26 +1250,123 @@ msgEls.body.addEventListener("keydown", (e) => {
   }
 });
 
-// ── New message modal ──
-msgEls.newBtn.addEventListener("click", async () => {
-  try { await loadUsers(); } catch {}
-  if (!state.users.length) { toast("No other users registered yet", "info"); return; }
-  msgEls.recipient.innerHTML = state.users.map(u =>
-    `<option value="${u.id}">${escapeHtml(u.email)}</option>`
-  ).join("");
-  msgEls.modal.classList.remove("hidden");
-});
-$("nm-close").addEventListener("click", () => msgEls.modal.classList.add("hidden"));
-$("nm-cancel").addEventListener("click", () => msgEls.modal.classList.add("hidden"));
-msgEls.modal.addEventListener("click", (e) => { if (e.target === msgEls.modal) msgEls.modal.classList.add("hidden"); });
-$("nm-open").addEventListener("click", async () => {
-  const id = Number(msgEls.recipient.value);
+// ── New conversation modal (tabs: DM / Create group / Join group) ──
+function nmCloseModal() {
   msgEls.modal.classList.add("hidden");
-  if (!state.threads.find(t => t.peerId === id)) {
-    const peer = state.users.find(u => u.id === id);
-    if (peer) state.threads.unshift({ peerId: id, peerEmail: peer.email, unread: 0, lastAt: null });
-  }
-  await openThread(id);
+  for (const id of ["nm-dm-error","nm-create-error","nm-join-error"]) $(id).classList.add("hidden");
+  $("nm-group-share").classList.add("hidden");
+  $("nm-group-share").textContent = "";
+}
+function nmSetTab(name) {
+  for (const t of $$("[data-nm-tab]")) t.classList.toggle("active", t.dataset.nmTab === name);
+  for (const p of ["dm","create","join"]) $(`nm-pane-${p}`).classList.toggle("hidden", p !== name);
+}
+for (const t of $$("[data-nm-tab]")) t.addEventListener("click", () => nmSetTab(t.dataset.nmTab));
+for (const b of $$("[data-nm-cancel]")) b.addEventListener("click", nmCloseModal);
+$("nm-close").addEventListener("click", nmCloseModal);
+msgEls.modal.addEventListener("click", (e) => { if (e.target === msgEls.modal) nmCloseModal(); });
+
+msgEls.newBtn.addEventListener("click", () => {
+  $("nm-email").value = "";
+  $("nm-group-name").value = "";
+  $("nm-group-pass").value = "";
+  $("nm-join-code").value = "";
+  nmSetTab("dm");
+  msgEls.modal.classList.remove("hidden");
+  setTimeout(() => $("nm-email").focus(), 30);
+});
+
+function nmShowErr(id, msg) { const el = $(id); el.textContent = msg; el.classList.remove("hidden"); }
+
+$("nm-open-dm").addEventListener("click", async () => {
+  $("nm-dm-error").classList.add("hidden");
+  const email = $("nm-email").value.trim().toLowerCase();
+  if (!email) return nmShowErr("nm-dm-error", "Enter an email address");
+  try {
+    busy("Looking up…");
+    const peer = await api.post("/api/messages/lookup", { email });
+    if (!state.threads.find(t => t.peerId === peer.id)) {
+      state.threads.unshift({ peerId: peer.id, peerEmail: peer.email, unread: 0, lastAt: null });
+    }
+    nmCloseModal();
+    await openDmThread(peer.id);
+  } catch (err) {
+    nmShowErr("nm-dm-error",
+      err.status === 404 ? "No account with that email" : (err.message || "Lookup failed"));
+  } finally { unbusy(); }
+});
+
+$("nm-group-gen").addEventListener("click", () => {
+  $("nm-group-pass").value = generatePassphrase(24);
+});
+
+$("nm-create-go").addEventListener("click", async () => {
+  $("nm-create-error").classList.add("hidden");
+  const name = $("nm-group-name").value.trim();
+  const passcode = $("nm-group-pass").value;
+  if (!name) return nmShowErr("nm-create-error", "Group name required");
+  if (!passcode || passcode.length < 8) return nmShowErr("nm-create-error", "Passcode must be at least 8 characters");
+  try {
+    busy("Creating group…");
+    const saltBytes = crypto.getRandomValues(new Uint8Array(16));
+    const saltHex = bytesToHex(saltBytes);
+    const { authHash, vaultKey: groupKey } = await deriveGroupAuth(passcode, saltHex);
+    const keyHex = bytesToHex(groupKey);
+    const wrappedKey = await sealJson({ passcode, key: keyHex }, state.vaultKey);
+    const r = await api.post("/api/groups", { name, salt: saltHex, authHash, wrappedKey });
+    state.groups.unshift({
+      id: r.id, name: r.name, salt: saltHex, wrappedKey,
+      key: keyHex, passcode, unread: 0, lastAt: null,
+    });
+    renderGroups();
+    const code = `${r.id}:${passcode}`;
+    const share = $("nm-group-share");
+    share.textContent = `Join code: ${code}  (also copied to clipboard)`;
+    share.classList.remove("hidden");
+    try { await navigator.clipboard.writeText(code); } catch {}
+    toast("Group created — code copied", "info", "✓", 4000);
+    setTimeout(() => { nmCloseModal(); openGroupThread(r.id); }, 1200);
+  } catch (err) {
+    nmShowErr("nm-create-error", err.message || "Create failed");
+  } finally { unbusy(); }
+});
+
+$("nm-join-go").addEventListener("click", async () => {
+  $("nm-join-error").classList.add("hidden");
+  const raw = $("nm-join-code").value.trim();
+  const idx = raw.indexOf(":");
+  if (idx <= 0) return nmShowErr("nm-join-error", "Code must look like  id:passphrase");
+  const groupId = Number(raw.slice(0, idx));
+  const passcode = raw.slice(idx + 1);
+  if (!Number.isFinite(groupId) || !passcode) return nmShowErr("nm-join-error", "Invalid code");
+  try {
+    busy("Joining…");
+    const pre = await api.get(`/api/groups/${groupId}/preflight`);
+    const { authHash, vaultKey: groupKey } = await deriveGroupAuth(passcode, pre.salt);
+    const keyHex = bytesToHex(groupKey);
+    const wrappedKey = await sealJson({ passcode, key: keyHex }, state.vaultKey);
+    await api.post(`/api/groups/${groupId}/join`, { authHash, wrappedKey });
+    const existing = state.groups.find(g => g.id === groupId);
+    if (existing) {
+      existing.key = keyHex;
+      existing.passcode = passcode;
+      existing.wrappedKey = wrappedKey;
+    } else {
+      state.groups.unshift({
+        id: groupId, name: pre.name, salt: pre.salt, wrappedKey,
+        key: keyHex, passcode, unread: 0, lastAt: null,
+      });
+    }
+    renderGroups();
+    nmCloseModal();
+    await openGroupThread(groupId);
+    toast(`Joined "${pre.name}"`, "info", "✓");
+  } catch (err) {
+    const msg = err.status === 403 ? "Wrong join code"
+              : err.status === 404 ? "Group not found"
+              : (err.message || "Join failed");
+    nmShowErr("nm-join-error", msg);
+  } finally { unbusy(); }
 });
 
 // ── Unread badge polling ──
@@ -1150,7 +1390,9 @@ function startMessagePolling() {
     if (!state.user || !state.vaultKey) return;
     updateUnreadBadge();
     if (state.route === "messages" && state.activeThread) {
-      loadMessages(state.activeThread.peerId).catch(() => {});
+      const at = state.activeThread;
+      const p = at.kind === "dm" ? loadDmMessages(at.peerId) : loadGroupMessages(at.groupId);
+      p.catch(() => {});
     } else if (state.route === "messages") {
       loadThreads().catch(() => {});
     }

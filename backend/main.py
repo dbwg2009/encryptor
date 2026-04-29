@@ -99,6 +99,35 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_sender    ON messages(sender_id,    created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_pair      ON messages(sender_id, recipient_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  salt BLOB NOT NULL,
+  verifier_hash TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  wrapped_key TEXT NOT NULL,
+  joined_at INTEGER NOT NULL,
+  last_read_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (group_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
+
+CREATE TABLE IF NOT EXISTS group_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  ciphertext TEXT NOT NULL,
+  hint TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at DESC);
 """
 
 
@@ -258,6 +287,27 @@ class DeleteAccountIn(BaseModel):
 
 class MessageIn(BaseModel):
     recipientId: int
+    ciphertext: str = Field(min_length=1, max_length=131072)
+    hint: Optional[str] = Field(default=None, max_length=120)
+
+
+class LookupIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class GroupCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    salt: str = Field(pattern="^[0-9a-fA-F]{32}$")
+    authHash: str = Field(pattern="^[0-9a-fA-F]{64}$")
+    wrappedKey: str = Field(min_length=1, max_length=4096)
+
+
+class GroupJoinIn(BaseModel):
+    authHash: str = Field(pattern="^[0-9a-fA-F]{64}$")
+    wrappedKey: str = Field(min_length=1, max_length=4096)
+
+
+class GroupMessageIn(BaseModel):
     ciphertext: str = Field(min_length=1, max_length=131072)
     hint: Optional[str] = Field(default=None, max_length=120)
 
@@ -536,14 +586,19 @@ def sessions_revoke(sess_id: str, user = Depends(auth_dep)):
     return Response(status_code=204)
 
 
-@app.get("/api/users")
-def users_list(user = Depends(require_user)):
+@app.post("/api/messages/lookup")
+def message_lookup(body: LookupIn, request: Request, user = Depends(auth_dep)):
+    rate_limit(f"lookup:{client_ip(request)}", 30, 60)
+    email = body.email.lower().strip()
+    if not EMAIL_RE.match(email):
+        raise HTTPException(400, "Invalid email")
+    if email == user["email"]:
+        raise HTTPException(400, "Cannot message yourself")
     with db() as conn:
-        rows = conn.execute(
-            "SELECT id, email FROM users WHERE id != ? ORDER BY email",
-            (user["id"],)
-        ).fetchall()
-    return [{"id": r["id"], "email": r["email"]} for r in rows]
+        row = conn.execute("SELECT id, email FROM users WHERE email = ?", (email,)).fetchone()
+    if not row:
+        raise HTTPException(404, "No account with that email")
+    return {"id": row["id"], "email": row["email"]}
 
 
 @app.get("/api/messages/threads")
@@ -647,10 +702,11 @@ def message_delete(msg_id: int, user = Depends(auth_dep)):
 
 @app.get("/api/messages/unread-count")
 def unread_count(user = Depends(require_user)):
+    uid = user["id"]
     with db() as conn:
-        n = conn.execute(
+        dm = conn.execute(
             "SELECT COUNT(*) FROM messages WHERE recipient_id = ? AND read_at IS NULL AND deleted_by_recipient = 0",
-            (user["id"],)
+            (uid,)
         ).fetchone()[0]
         grp = conn.execute("""
             SELECT COALESCE(SUM(c), 0) FROM (
