@@ -128,6 +128,15 @@ CREATE TABLE IF NOT EXISTS group_messages (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  subscription_json TEXT NOT NULL,
+  user_agent TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
 """
 
 
@@ -310,6 +319,10 @@ class GroupJoinIn(BaseModel):
 class GroupMessageIn(BaseModel):
     ciphertext: str = Field(min_length=1, max_length=131072)
     hint: Optional[str] = Field(default=None, max_length=120)
+
+
+class PushSubscriptionIn(BaseModel):
+    subscription: dict
 
 
 app = FastAPI(title="ASCII Cipher Vault", openapi_url=None, docs_url=None, redoc_url=None)
@@ -719,6 +732,19 @@ def unread_count(user = Depends(require_user)):
             )
         """, (uid, uid)).fetchone()[0]
     return {"unread": dm + (grp or 0)}
+
+
+@app.post("/api/push-subscription", status_code=201)
+def register_push_subscription(body: PushSubscriptionIn, request: Request, user = Depends(require_user)):
+    import json
+    user_agent = request.headers.get("user-agent", "unknown")
+    now = int(time.time())
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO push_subscriptions (user_id, subscription_json, user_agent, created_at) VALUES (?,?,?,?)",
+            (user["id"], json.dumps(body.subscription), user_agent, now)
+        )
+    return {"ok": True}
 
 
 def _require_group_member(conn, group_id: int, user_id: int):

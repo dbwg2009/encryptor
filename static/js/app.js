@@ -220,6 +220,10 @@ $("unlock-form").addEventListener("submit", async (e) => {
     refreshKeySource();
     updateUnreadBadge();
     startMessagePolling();
+    // Subscribe to push notifications for this session
+    subscribeToPushNotifications().catch((err) => {
+      console.log('Push notification subscription not available:', err);
+    });
     $("unlock-password").value = "";
   } catch (err) {
     const el = $("unlock-error");
@@ -1400,6 +1404,57 @@ function startMessagePolling() {
 }
 function stopMessagePolling() {
   if (_msgPoll) { clearInterval(_msgPoll); _msgPoll = null; }
+}
+
+// ── PWA / Push notification support ──
+async function subscribeToPushNotifications() {
+  if (!('serviceWorker' in navigator && 'PushManager' in window)) {
+    console.log('Push notifications not supported');
+    return false;
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+
+    // If not subscribed, ask for permission and subscribe
+    if (!subscription) {
+      if (Notification.permission === 'denied') {
+        return false;
+      }
+
+      if (Notification.permission === 'default') {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+          return false;
+        }
+      }
+
+      try {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: null, // No server public key needed for demo
+        });
+
+        // Send subscription to backend to store for this user
+        await api.post('/api/push-subscription', {
+          subscription: subscription.toJSON(),
+        }).catch((err) => {
+          console.log('Failed to register push subscription with server:', err);
+        });
+
+        return true;
+      } catch (err) {
+        console.log('Push subscription failed:', err);
+        return false;
+      }
+    }
+
+    return true;
+  } catch (err) {
+    console.log('Error setting up push notifications:', err);
+    return false;
+  }
 }
 
 function ensureSecureContext() {
