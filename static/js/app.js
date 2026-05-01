@@ -720,6 +720,8 @@ async function loadSettings() {
   $("set-created").textContent = fmtTime(state.user.createdAt);
   $("set-last").textContent = fmtTime(state.user.lastLoginAt);
   await loadSessions();
+  await loadBlockedUsers();
+  await loadLoginHistory();
 }
 
 async function loadSessions() {
@@ -985,9 +987,29 @@ async function openDmThread(peerId) {
       <div class="h-email">${escapeHtml(peerEmail)}</div>
       <div class="h-meta">direct · end-to-end · key never leaves your browser</div>
     </div>
-    <button class="icon-btn" id="msg-refresh" type="button">refresh</button>
+    <div style="display:flex;gap:6px;">
+      <button class="icon-btn" id="msg-refresh" type="button">refresh</button>
+      <button class="icon-btn" id="msg-block" type="button">block</button>
+    </div>
   `;
   $("msg-refresh").addEventListener("click", () => loadDmMessages(peerId));
+  $("msg-block").addEventListener("click", async () => {
+    const ok = await confirmDialog({
+      title: `Block ${peerEmail}?`,
+      body: "They won't be able to send you direct messages.",
+      okText: "Block",
+    });
+    if (!ok) return;
+    try {
+      await api.post("/api/block", { userId: peerId });
+      toast("Blocked", "info");
+      state.threads = state.threads.filter(x => x.peerId !== peerId);
+      state.activeThread = null;
+      msgEls.header.innerHTML = `<div class="muted small">Pick a conversation or start a new one.</div>`;
+      msgEls.compose.classList.add("hidden");
+      renderThreads();
+    } catch (err) { toast(err.message || "Block failed", "error"); }
+  });
   msgEls.compose.classList.remove("hidden");
   msgEls.keyRow.classList.remove("hidden");
   refreshMsgKeySource();
@@ -1113,11 +1135,12 @@ function renderBubble(m, decrypted, side, opts = {}) {
     : `<div>🔒 ${escapeHtml(m.ciphertext.slice(0, 80))}…</div>`;
   const replyIndicator = m.replyToId ? `<div class="b-reply-indicator">↳ reply to message</div>` : "";
   return `
-    <div class="msg-bubble ${side} ${decrypted.ok ? "" : "encrypted"}" data-id="${m.id}" data-reply-to="${m.replyToId || ""}">
+    <div class="msg-bubble ${side} ${decrypted.ok ? "" : "encrypted"}" data-id="${m.id}" data-reply-to="${m.replyToId || ""}" data-sender="${opts.senderId || ""}">
       ${sender}${replyIndicator}${hint}${body}
       <div class="b-meta">${meta}</div>
       <div class="b-actions">
         <button data-act="reply">reply</button>
+        <button data-act="report">report</button>
         <button data-act="del">delete</button>
       </div>
     </div>`;
@@ -1132,7 +1155,10 @@ async function renderDmMessages() {
   const html = [];
   for (const m of ordered) {
     const r = await tryDecryptDm(m.ciphertext, state.activeThread.peerId);
-    html.push(renderBubble(m, r, m.fromMe ? "from-me" : "from-them", { label: r.ok ? `★ ${r.keyLabel}` : "" }));
+    html.push(renderBubble(m, r, m.fromMe ? "from-me" : "from-them", {
+      label: r.ok ? `★ ${r.keyLabel}` : "",
+      senderId: m.senderId,
+    }));
   }
   msgEls.list.innerHTML = html.join("");
   bindBubbleDelete((id) => api.del(`/api/messages/${id}`));
@@ -1151,7 +1177,10 @@ async function renderGroupMessages() {
     const r = await decryptToken(m.ciphertext, groupKey);
     html.push(renderBubble(m, r,
       m.fromMe ? "from-me" : "from-them",
-      { sender: m.fromMe ? null : (m.senderEmail || "(unknown)") }));
+      {
+        sender: m.fromMe ? null : (m.senderEmail || "(unknown)"),
+        senderId: m.senderId,
+      }));
   }
   msgEls.list.innerHTML = html.join("");
   const groupId = state.activeThread.groupId;
@@ -1190,6 +1219,12 @@ function bindBubbleDelete(deleteFn) {
       state.replyingTo = { id, preview };
       renderReplyIndicator();
       setTimeout(() => msgEls.body.focus(), 50);
+    });
+    el.querySelector('[data-act="report"]')?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = Number(el.dataset.id);
+      const senderId = Number(el.dataset.sender) || null;
+      showReportModal(id, senderId);
     });
   }
 }
@@ -1498,6 +1533,86 @@ async function subscribeToPushNotifications() {
   } catch (err) {
     console.log('Error setting up push notifications:', err);
     return false;
+  }
+}
+
+// ── Report modal ──
+let reportingMsgId = null, reportingSenderId = null;
+function showReportModal(msgId, senderId) {
+  reportingMsgId = msgId;
+  reportingSenderId = senderId;
+  $("report-reason").value = "";
+  $("report-details").value = "";
+  $("report-error").classList.add("hidden");
+  $("report-modal").classList.remove("hidden");
+  setTimeout(() => $("report-reason").focus(), 30);
+}
+$("report-close").addEventListener("click", () => $("report-modal").classList.add("hidden"));
+$("report-cancel").addEventListener("click", () => $("report-modal").classList.add("hidden"));
+$("report-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const reason = $("report-reason").value;
+  if (!reason) return;
+  try {
+    await api.post("/api/report", {
+      messageId: reportingMsgId,
+      reportedUserId: reportingSenderId,
+      reason,
+      details: $("report-details").value || undefined,
+    });
+    $("report-modal").classList.add("hidden");
+    toast("Report submitted. Thank you.", "info");
+  } catch (err) {
+    $("report-error").textContent = err.message || "Report failed";
+    $("report-error").classList.remove("hidden");
+  }
+});
+
+async function loadBlockedUsers() {
+  try {
+    const blocked = await api.get("/api/blocks");
+    const list = $("blocked-list");
+    if (blocked.length === 0) {
+      list.innerHTML = "";
+      $("blocked-empty").classList.remove("hidden");
+      return;
+    }
+    $("blocked-empty").classList.add("hidden");
+    list.innerHTML = blocked.map(u => `
+      <div class="session" style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div><b>${escapeHtml(u.email)}</b></div>
+          <div class="muted small">blocked ${fmtTime(u.blockedAt)}</div>
+        </div>
+        <button class="btn ghost" data-unblock-id="${u.id}">Unblock</button>
+      </div>
+    `).join("");
+    for (const btn of list.querySelectorAll("[data-unblock-id]")) {
+      btn.addEventListener("click", async () => {
+        try {
+          await api.del(`/api/block/${btn.dataset.unblockId}`);
+          await loadBlockedUsers();
+          toast("Unblocked", "info");
+        } catch (err) { toast(err.message, "error"); }
+      });
+    }
+  } catch (err) {
+    console.log("Failed to load blocked users:", err);
+  }
+}
+
+async function loadLoginHistory() {
+  try {
+    const logins = await api.get("/api/auth/logins");
+    const list = $("logins-list");
+    list.innerHTML = logins.map(l => `
+      <div class="session">
+        <div><b>${escapeHtml(l.userAgent)}</b></div>
+        <div class="muted small">${escapeHtml(l.ip)} · ${fmtTime(l.createdAt)}</div>
+      </div>
+    `).join("");
+  } catch (err) {
+    console.log("Failed to load login history:", err);
   }
 }
 
