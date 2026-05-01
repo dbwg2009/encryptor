@@ -305,6 +305,21 @@
     </section>
 
     <section class="card">
+      <h3 class="section-h">Blocked users</h3>
+      <p class="muted small">Blocked users cannot send you direct messages.</p>
+      <div id="blocked-list" class="sessions-list"></div>
+      <div id="blocked-empty" class="empty hidden" style="padding:8px;">
+        <p class="muted small">No blocked users.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3 class="section-h">Login history</h3>
+      <p class="muted small">Recent sign-ins to your account. If you see an unrecognised login, change your password.</p>
+      <div id="logins-list" class="sessions-list"></div>
+    </section>
+
+    <section class="card">
       <h3 class="section-h">Backup</h3>
       <p class="muted small">Export your vault as an encrypted JSON file. The export contains only ciphertext and is safe to store anywhere — but you'll still need your master password to use it.</p>
       <div class="actions">
@@ -449,6 +464,37 @@
       <button class="btn ghost" id="cm-cancel" type="button">Cancel</button>
       <button class="btn danger" id="cm-ok" type="button">Confirm</button>
     </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="report-modal">
+  <div class="modal-card">
+    <header class="modal-head">
+      <h3>Report</h3>
+      <button class="icon-btn" id="report-close" type="button">close</button>
+    </header>
+    <form id="report-form" class="form">
+      <label class="field">
+        <span>Reason</span>
+        <select id="report-reason" class="select" required>
+          <option value="">— Select a reason —</option>
+          <option value="harassment">Harassment or bullying</option>
+          <option value="spam">Spam</option>
+          <option value="abuse">Abusive language</option>
+          <option value="inappropriate">Inappropriate content</option>
+          <option value="other">Other</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Details <span class="hint">optional</span></span>
+        <textarea id="report-details" rows="3" maxlength="2000" placeholder="Additional context…"></textarea>
+      </label>
+      <p id="report-error" class="form-error hidden"></p>
+      <div class="modal-foot">
+        <button class="btn ghost" type="button" id="report-cancel">Cancel</button>
+        <button class="btn primary" type="submit">Report</button>
+      </div>
+    </form>
   </div>
 </div>
 

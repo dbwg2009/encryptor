@@ -139,6 +139,49 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
+
+CREATE TABLE IF NOT EXISTS blocked_users (
+  blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (blocker_id, blocked_id)
+);
+CREATE INDEX IF NOT EXISTS idx_blocked_users_blocked ON blocked_users(blocked_id);
+
+CREATE TABLE IF NOT EXISTS reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  reporter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+  reported_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+  group_message_id INTEGER REFERENCES group_messages(id) ON DELETE SET NULL,
+  reason TEXT NOT NULL,
+  details TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reports_reported_user ON reports(reported_user_id);
+
+CREATE TABLE IF NOT EXISTS archived_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  original_msg_id INTEGER NOT NULL,
+  sender_id INTEGER,
+  recipient_id INTEGER,
+  ciphertext TEXT NOT NULL,
+  hint TEXT,
+  created_at INTEGER NOT NULL,
+  archived_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_archived_messages_sender ON archived_messages(sender_id);
+CREATE INDEX IF NOT EXISTS idx_archived_messages_recipient ON archived_messages(recipient_id);
+
+CREATE TABLE IF NOT EXISTS login_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ip TEXT,
+  user_agent TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_login_history_user ON login_history(user_id, created_at DESC);
 """
 
 
@@ -350,6 +393,23 @@ class PushSubscriptionIn(BaseModel):
     subscription: dict
 
 
+class BlockIn(BaseModel):
+    userId: int
+
+
+class ReportIn(BaseModel):
+    reportedUserId: Optional[int] = None
+    messageId: Optional[int] = None
+    groupMessageId: Optional[int] = None
+    reason: str = Field(min_length=5, max_length=500)
+    details: Optional[str] = Field(default=None, max_length=2000)
+
+
+class InviteToGroupIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    groupId: int
+
+
 app = FastAPI(title="ASCII Cipher Vault", openapi_url=None, docs_url=None, redoc_url=None)
 
 
@@ -431,6 +491,7 @@ def login(body: LoginIn, request: Request, response: Response):
     except (VerifyMismatchError, InvalidHash):
         raise HTTPException(401, "Invalid credentials")
     make_session(row["id"], request, response)
+    _log_login(row["id"], request)
     with db() as conn:
         conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (int(time.time()), row["id"]))
     return {"id": row["id"], "email": email}
@@ -982,6 +1043,167 @@ def group_message_delete(group_id: int, msg_id: int, user = Depends(auth_dep)):
             raise HTTPException(403, "Not your message")
         conn.execute("DELETE FROM group_messages WHERE id = ?", (msg_id,))
     return Response(status_code=204)
+
+
+# ── Blocking ──
+@app.post("/api/block", status_code=201)
+def block_user(body: BlockIn, user = Depends(auth_dep)):
+    if body.userId == user["id"]:
+        raise HTTPException(400, "Cannot block yourself")
+    now = int(time.time())
+    with db() as conn:
+        target = conn.execute("SELECT id FROM users WHERE id = ?", (body.userId,)).fetchone()
+        if not target:
+            raise HTTPException(404, "User not found")
+        try:
+            conn.execute(
+                "INSERT INTO blocked_users (blocker_id, blocked_id, created_at) VALUES (?,?,?)",
+                (user["id"], body.userId, now)
+            )
+        except sqlite3.IntegrityError:
+            raise HTTPException(400, "Already blocked")
+    return {"ok": True}
+
+
+@app.delete("/api/block/{user_id}")
+def unblock_user(user_id: int, user = Depends(auth_dep)):
+    with db() as conn:
+        conn.execute(
+            "DELETE FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?",
+            (user["id"], user_id)
+        )
+    return Response(status_code=204)
+
+
+@app.get("/api/blocks")
+def list_blocked(user = Depends(auth_dep)):
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT u.id, u.email, b.created_at FROM blocked_users b "
+            "JOIN users u ON b.blocked_id = u.id WHERE b.blocker_id = ? "
+            "ORDER BY b.created_at DESC",
+            (user["id"],)
+        ).fetchall()
+    return [{"id": r["id"], "email": r["email"], "blockedAt": r["created_at"]} for r in rows]
+
+
+# ── Reports ──
+@app.post("/api/report", status_code=201)
+def report(body: ReportIn, user = Depends(auth_dep)):
+    if not body.reportedUserId and not body.messageId and not body.groupMessageId:
+        raise HTTPException(400, "Must report a user or message")
+    now = int(time.time())
+    with db() as conn:
+        cur = conn.execute(
+            "INSERT INTO reports (reporter_id, reported_user_id, message_id, group_message_id, reason, details, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (user["id"], body.reportedUserId, body.messageId, body.groupMessageId, body.reason, body.details, now)
+        )
+    return {"id": cur.lastrowid}
+
+
+# ── Invite to group by email ──
+@app.post("/api/groups/{group_id}/invite", status_code=201)
+def invite_to_group(group_id: int, body: InviteToGroupIn, user = Depends(auth_dep)):
+    with db() as conn:
+        _require_group_member(conn, group_id, user["id"])
+        target = conn.execute(
+            "SELECT id FROM users WHERE email = ?", (body.email.lower(),)
+        ).fetchone()
+        if not target:
+            raise HTTPException(404, "User not found")
+        # Send invitation (in real app, would email the join code)
+        # For now, just return the info for client to handle
+    return {"message": f"Invitation info ready for {body.email}"}
+
+
+# ── Session management ──
+@app.post("/api/auth/logout-all")
+def logout_all(body: LoginIn, user = Depends(auth_dep)):
+    """Logout all other sessions, require password verification"""
+    with db() as conn:
+        stored = conn.execute(
+            "SELECT auth_hash FROM users WHERE id = ?", (user["id"],)
+        ).fetchone()
+        if not stored:
+            raise HTTPException(401, "User not found")
+        try:
+            hasher.verify(stored["auth_hash"], body.email)  # email field reused as auth_hash for verification
+        except (VerifyMismatchError, InvalidHash):
+            raise HTTPException(401, "Verification failed")
+        now = int(time.time())
+        # Delete all sessions except current
+        conn.execute(
+            "DELETE FROM sessions WHERE user_id = ? AND id != ?",
+            (user["id"], user.get("session_id", ""))
+        )
+    return {"ok": True}
+
+
+# ── Login tracking ──
+def _log_login(user_id: int, request: Request):
+    """Track login for new sign-in notifications"""
+    ip = client_ip(request)
+    ua = request.headers.get("user-agent", "unknown")
+    now = int(time.time())
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO login_history (user_id, ip, user_agent, created_at) VALUES (?,?,?,?)",
+            (user_id, ip, ua, now)
+        )
+
+
+@app.get("/api/auth/logins")
+def get_logins(user = Depends(auth_dep)):
+    """List recent logins"""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT ip, user_agent, created_at FROM login_history WHERE user_id = ? "
+            "ORDER BY created_at DESC LIMIT 50",
+            (user["id"],)
+        ).fetchall()
+    return [{
+        "ip": r["ip"],
+        "userAgent": r["user_agent"],
+        "createdAt": r["created_at"]
+    } for r in rows]
+
+
+# ── Account deletion with archival ──
+@app.post("/api/auth/delete-account")
+def delete_account_new(body: DeleteAccountIn, user = Depends(auth_dep)):
+    """Delete account and archive messages"""
+    with db() as conn:
+        # Verify password
+        stored = conn.execute(
+            "SELECT auth_hash FROM users WHERE id = ?", (user["id"],)
+        ).fetchone()
+        if not stored:
+            raise HTTPException(401, "User not found")
+        try:
+            hasher.verify(stored["auth_hash"], body.email)  # email field reused
+        except (VerifyMismatchError, InvalidHash):
+            raise HTTPException(401, "Wrong password")
+
+        # Archive all messages
+        now = int(time.time())
+        conn.execute("BEGIN")
+        try:
+            # Archive sent and received DMs
+            conn.execute("""
+                INSERT INTO archived_messages (original_msg_id, sender_id, recipient_id, ciphertext, hint, created_at, archived_at)
+                SELECT id, sender_id, recipient_id, ciphertext, hint, created_at, ?
+                FROM messages WHERE sender_id = ? OR recipient_id = ?
+            """, (now, user["id"], user["id"]))
+
+            # Delete all user data (cascade deletes messages, sessions, etc.)
+            conn.execute("DELETE FROM users WHERE id = ?", (user["id"],))
+            conn.execute("COMMIT")
+        except Exception as e:
+            conn.execute("ROLLBACK")
+            raise HTTPException(500, f"Deletion failed: {str(e)}")
+    return Response(status_code=204)
+
 
 @app.get("/api/health")
 def health():
