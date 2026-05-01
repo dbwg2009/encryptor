@@ -816,6 +816,33 @@ a { color: var(--accent-hi); }
   margin-bottom: 4px;
   opacity: 0.8;
 }
+.b-media-item {
+  margin-top: 6px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(0,0,0,0.15);
+}
+.b-media-loading {
+  padding: 10px 12px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.b-media-img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 8px;
+  cursor: zoom-in;
+}
+.b-media-video {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 8px;
+}
 
 @media (max-width: 800px) {
   .msg-layout { grid-template-columns: 1fr; }
