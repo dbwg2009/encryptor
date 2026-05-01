@@ -244,6 +244,7 @@
         </div>
         <form id="msg-compose" class="msg-compose hidden">
           <div id="msg-reply-indicator" class="msg-reply-indicator hidden"></div>
+          <div id="msg-attach-indicator" class="msg-reply-indicator hidden"></div>
           <div class="msg-compose-keyrow">
             <select id="msg-key-source" class="select select-sm">
               <option value="custom">Custom key…</option>
@@ -253,8 +254,10 @@
           </div>
           <div class="msg-compose-row">
             <textarea id="msg-body" placeholder="Type a message…  (Ctrl+Enter to send)" rows="2"></textarea>
+            <button class="icon-btn" id="msg-attach" type="button" title="Attach image, video, or file">attach</button>
             <button class="btn primary" type="submit">Send</button>
           </div>
+          <input id="msg-file" type="file" hidden accept="image/*,video/*,audio/*,application/pdf">
           <input id="msg-hint" type="text" class="msg-hint-input" placeholder="Optional unencrypted hint about which key (e.g. 'project-x')" maxlength="120" autocomplete="off">
         </form>
       </section>

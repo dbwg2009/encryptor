@@ -182,6 +182,14 @@ CREATE TABLE IF NOT EXISTS login_history (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_login_history_user ON login_history(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS media (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  size_bytes INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_user ON media(user_id);
 """
 
 
@@ -432,7 +440,8 @@ async def security_headers(request: Request, call_next):
         "default-src 'self'; "
         "script-src 'self'; "
         "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; "
+        "img-src 'self' data: blob:; "
+        "media-src 'self' blob:; "
         "connect-src 'self'; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
@@ -569,7 +578,17 @@ def delete_account(body: DeleteAccountIn, response: Response, user = Depends(aut
         hasher.verify(user["auth_hash"], body.authHash.lower())
     except (VerifyMismatchError, InvalidHash):
         raise HTTPException(403, "Password incorrect")
+    now = int(time.time())
     with db() as conn:
+        # Archive sent and received DMs before delete
+        try:
+            conn.execute("""
+                INSERT INTO archived_messages (original_msg_id, sender_id, recipient_id, ciphertext, hint, created_at, archived_at)
+                SELECT id, sender_id, recipient_id, ciphertext, hint, created_at, ?
+                FROM messages WHERE sender_id = ? OR recipient_id = ?
+            """, (now, user["id"], user["id"]))
+        except Exception:
+            pass  # Archive may fail if table doesn't exist yet
         conn.execute("DELETE FROM users WHERE id = ?", (user["id"],))
     response.delete_cookie(SESSION_COOKIE, path="/")
     response.delete_cookie(CSRF_COOKIE, path="/")
@@ -1119,42 +1138,38 @@ def invite_to_group(group_id: int, body: InviteToGroupIn, user = Depends(auth_de
 
 # ── Session management ──
 @app.post("/api/auth/logout-all")
-def logout_all(body: LoginIn, user = Depends(auth_dep)):
-    """Logout all other sessions, require password verification"""
+def logout_all(body: DeleteAccountIn, user = Depends(auth_dep)):
+    """Logout all other sessions, require password (auth_hash) verification"""
+    try:
+        hasher.verify(user["auth_hash"], body.authHash.lower())
+    except (VerifyMismatchError, InvalidHash):
+        raise HTTPException(401, "Wrong password")
     with db() as conn:
-        stored = conn.execute(
-            "SELECT auth_hash FROM users WHERE id = ?", (user["id"],)
-        ).fetchone()
-        if not stored:
-            raise HTTPException(401, "User not found")
-        try:
-            hasher.verify(stored["auth_hash"], body.email)  # email field reused as auth_hash for verification
-        except (VerifyMismatchError, InvalidHash):
-            raise HTTPException(401, "Verification failed")
-        now = int(time.time())
-        # Delete all sessions except current
         conn.execute(
             "DELETE FROM sessions WHERE user_id = ? AND id != ?",
-            (user["id"], user.get("session_id", ""))
+            (user["id"], user["sess_id"])
         )
     return {"ok": True}
 
 
 # ── Login tracking ──
 def _log_login(user_id: int, request: Request):
-    """Track login for new sign-in notifications"""
-    ip = client_ip(request)
-    ua = request.headers.get("user-agent", "unknown")
-    now = int(time.time())
-    with db() as conn:
-        conn.execute(
-            "INSERT INTO login_history (user_id, ip, user_agent, created_at) VALUES (?,?,?,?)",
-            (user_id, ip, ua, now)
-        )
+    """Track login history for sign-in notifications"""
+    try:
+        ip = client_ip(request)
+        ua = request.headers.get("user-agent", "unknown")[:500]
+        now = int(time.time())
+        with db() as conn:
+            conn.execute(
+                "INSERT INTO login_history (user_id, ip, user_agent, created_at) VALUES (?,?,?,?)",
+                (user_id, ip, ua, now)
+            )
+    except Exception as e:
+        print(f"[login_history] error: {e}")
 
 
 @app.get("/api/auth/logins")
-def get_logins(user = Depends(auth_dep)):
+def get_logins(user = Depends(require_user)):
     """List recent logins"""
     with db() as conn:
         rows = conn.execute(
@@ -1169,40 +1184,40 @@ def get_logins(user = Depends(auth_dep)):
     } for r in rows]
 
 
-# ── Account deletion with archival ──
-@app.post("/api/auth/delete-account")
-def delete_account_new(body: DeleteAccountIn, user = Depends(auth_dep)):
-    """Delete account and archive messages"""
+# ── Media uploads (zero-knowledge: ciphertext only) ──
+@app.post("/api/media", status_code=201)
+async def media_upload(request: Request, user = Depends(auth_dep)):
+    """Accept encrypted media blob and store it. Returns media_id for the recipient."""
+    content_length = int(request.headers.get("content-length", 0))
+    if content_length > 50 * 1024 * 1024:  # 50MB max
+        raise HTTPException(413, "File too large (max 50MB)")
+    body = await request.body()
+    if len(body) == 0:
+        raise HTTPException(400, "Empty body")
+    media_dir = DB_PATH.parent / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    media_id = secrets.token_urlsafe(24)
+    now = int(time.time())
+    (media_dir / media_id).write_bytes(body)
     with db() as conn:
-        # Verify password
-        stored = conn.execute(
-            "SELECT auth_hash FROM users WHERE id = ?", (user["id"],)
-        ).fetchone()
-        if not stored:
-            raise HTTPException(401, "User not found")
-        try:
-            hasher.verify(stored["auth_hash"], body.email)  # email field reused
-        except (VerifyMismatchError, InvalidHash):
-            raise HTTPException(401, "Wrong password")
+        conn.execute(
+            "INSERT INTO media (id, user_id, size_bytes, created_at) VALUES (?,?,?,?)",
+            (media_id, user["id"], len(body), now)
+        )
+    return {"mediaId": media_id, "size": len(body)}
 
-        # Archive all messages
-        now = int(time.time())
-        conn.execute("BEGIN")
-        try:
-            # Archive sent and received DMs
-            conn.execute("""
-                INSERT INTO archived_messages (original_msg_id, sender_id, recipient_id, ciphertext, hint, created_at, archived_at)
-                SELECT id, sender_id, recipient_id, ciphertext, hint, created_at, ?
-                FROM messages WHERE sender_id = ? OR recipient_id = ?
-            """, (now, user["id"], user["id"]))
 
-            # Delete all user data (cascade deletes messages, sessions, etc.)
-            conn.execute("DELETE FROM users WHERE id = ?", (user["id"],))
-            conn.execute("COMMIT")
-        except Exception as e:
-            conn.execute("ROLLBACK")
-            raise HTTPException(500, f"Deletion failed: {str(e)}")
-    return Response(status_code=204)
+@app.get("/api/media/{media_id}")
+def media_get(media_id: str, user = Depends(require_user)):
+    """Return the raw encrypted blob. Authenticated users only; ID is unguessable."""
+    if not re.match(r"^[A-Za-z0-9_\-]{1,64}$", media_id):
+        raise HTTPException(400, "Invalid media id")
+    media_dir = DB_PATH.parent / "media"
+    path = media_dir / media_id
+    if not path.is_file():
+        raise HTTPException(404, "Not found")
+    return FileResponse(path, media_type="application/octet-stream",
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/health")

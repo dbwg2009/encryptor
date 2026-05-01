@@ -203,6 +203,22 @@ export async function openBytes(b64, wrappingKey) {
   return new Uint8Array(await subtle.decrypt({ name: "AES-GCM", iv }, key, ct));
 }
 
+// ─── Media encryption ──────────────────────────────────────────
+// Encrypt a file with a freshly-generated random 32-byte key.
+// Returns { ciphertext, fileKeyHex } — caller embeds fileKeyHex in the
+// (otherwise encrypted) message body so the recipient can decrypt.
+export async function encryptFile(bytes) {
+  const fileKey = crypto.getRandomValues(new Uint8Array(32));
+  const ciphertext = await sealBytes(bytes, fileKey);
+  // sealBytes returns base64 — convert back to bytes for upload
+  return { ciphertext: b64ToBytes(ciphertext), fileKeyHex: bytesToHex(fileKey) };
+}
+
+export async function decryptFile(bytes, fileKeyHex) {
+  const fileKey = hexToBytes(fileKeyHex);
+  return openBytes(bytesToB64(bytes), fileKey);
+}
+
 // ─── Passphrase generator ──────────────────────────────────────
 export function generatePassphrase(length = 24) {
   const alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*";

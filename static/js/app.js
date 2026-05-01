@@ -8,6 +8,7 @@ import {
   deriveAuthAndVault, deriveGroupAuth,
   sealJson, openJson, sealString, openString,
   sealBytes, openBytes,
+  encryptFile, decryptFile,
   generatePassphrase, passwordStrength,
   bytesToHex,
 } from "./crypto.js";
@@ -88,6 +89,7 @@ const state = {
   activeThread: null,   // {kind:'dm', peerId, peerEmail} | {kind:'group', groupId, name, key}
   threadKeyCache: {},   // peerId → vault item used last to decrypt (DM only)
   replyingTo: null,     // {id, preview} if replying to a message
+  pendingMedia: null,   // {id, keyHex, name, type, size} attached to next message
   route: "cipher",
   cipherMode: "encrypt",
   showKey: false,
@@ -909,7 +911,59 @@ const msgEls = {
   unreadBadge: $("msg-unread"),
   newBtn: $("msg-new"),
   modal: $("new-msg-modal"),
+  attachBtn: $("msg-attach"),
+  fileInput: $("msg-file"),
+  attachIndicator: $("msg-attach-indicator"),
 };
+
+function renderAttachIndicator() {
+  const el = msgEls.attachIndicator;
+  if (!state.pendingMedia) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    return;
+  }
+  const sizeKb = (state.pendingMedia.size / 1024).toFixed(1);
+  el.classList.remove("hidden");
+  el.innerHTML = `📎 ${escapeHtml(state.pendingMedia.name)} <span class="muted small">(${sizeKb} KB)</span> <button type="button" id="msg-attach-clear" class="icon-btn" style="margin-left:auto;">remove</button>`;
+  $("msg-attach-clear").addEventListener("click", () => {
+    state.pendingMedia = null;
+    renderAttachIndicator();
+  });
+}
+
+if (msgEls.attachBtn) {
+  msgEls.attachBtn.addEventListener("click", () => msgEls.fileInput.click());
+  msgEls.fileInput.addEventListener("change", async () => {
+    const f = msgEls.fileInput.files?.[0];
+    if (!f) return;
+    if (f.size > 50 * 1024 * 1024) {
+      toast("File too large (max 50MB)", "error");
+      msgEls.fileInput.value = "";
+      return;
+    }
+    try {
+      busy("Encrypting & uploading…");
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const { ciphertext, fileKeyHex } = await encryptFile(bytes);
+      const res = await api.postBinary("/api/media", ciphertext);
+      state.pendingMedia = {
+        id: res.mediaId,
+        keyHex: fileKeyHex,
+        name: f.name,
+        type: f.type || "application/octet-stream",
+        size: f.size,
+      };
+      renderAttachIndicator();
+      toast("Attachment ready", "info");
+    } catch (err) {
+      toast(err.message || "Upload failed", "error");
+    } finally {
+      msgEls.fileInput.value = "";
+      unbusy();
+    }
+  });
+}
 
 async function loadThreads() {
   if (!state.vaultKey) return;
@@ -1124,19 +1178,75 @@ async function tryDecryptDm(ciphertext, peerId) {
   return { ok: false };
 }
 
+// Parse a decrypted plaintext: if it's a JSON envelope with text+media, return
+// the structured form; otherwise treat as plain text.
+function parseMessagePayload(text) {
+  if (typeof text !== "string") return { text: "", media: [] };
+  if (!text.startsWith("{")) return { text, media: [] };
+  try {
+    const o = JSON.parse(text);
+    if (o && o.v === 1 && Array.isArray(o.media)) {
+      return { text: o.text || "", media: o.media };
+    }
+  } catch {}
+  return { text, media: [] };
+}
+
+function renderMediaPlaceholder(item) {
+  const sizeKb = (item.size / 1024).toFixed(1);
+  return `<div class="b-media-item" data-media-id="${escapeHtml(item.id)}" data-media-key="${escapeHtml(item.key)}" data-media-type="${escapeHtml(item.type)}" data-media-name="${escapeHtml(item.name)}">
+    <div class="b-media-loading">📎 ${escapeHtml(item.name)} <span class="muted small">(${sizeKb} KB)</span><br><button class="btn ghost" data-act="load-media">load</button></div>
+  </div>`;
+}
+
+async function loadMediaInto(el) {
+  const id = el.dataset.mediaId;
+  const keyHex = el.dataset.mediaKey;
+  const type = el.dataset.mediaType || "application/octet-stream";
+  const name = el.dataset.mediaName;
+  el.querySelector(".b-media-loading").innerHTML = `<span class="muted">decrypting…</span>`;
+  try {
+    const ct = await api.getBinary(`/api/media/${id}`);
+    const pt = await decryptFile(ct, keyHex);
+    const blob = new Blob([pt], { type });
+    const url = URL.createObjectURL(blob);
+    let html = "";
+    if (type.startsWith("image/")) {
+      html = `<img src="${url}" alt="${escapeHtml(name)}" class="b-media-img">`;
+    } else if (type.startsWith("video/")) {
+      html = `<video src="${url}" controls class="b-media-video"></video>`;
+    } else if (type.startsWith("audio/")) {
+      html = `<audio src="${url}" controls></audio>`;
+    } else {
+      html = `<a href="${url}" download="${escapeHtml(name)}" class="btn">⬇ ${escapeHtml(name)}</a>`;
+    }
+    el.innerHTML = html;
+  } catch (err) {
+    el.innerHTML = `<div class="form-error">media error: ${escapeHtml(err.message || "unknown")}</div>`;
+  }
+}
+
 function renderBubble(m, decrypted, side, opts = {}) {
   const meta = decrypted.ok
     ? `<span>${escapeHtml(opts.label || decrypted.keyLabel || "key")}</span><span>·</span><span>${fmtTime(m.createdAt)}</span>`
     : `<span>can't decrypt</span><span>·</span><span>${fmtTime(m.createdAt)}</span>`;
   const sender = opts.sender ? `<div class="b-hint">${escapeHtml(opts.sender)}</div>` : "";
   const hint = m.hint ? `<div class="b-hint">hint: ${escapeHtml(m.hint)}</div>` : "";
-  const body = decrypted.ok
-    ? `<div>${escapeHtml(decrypted.text)}</div>`
-    : `<div>🔒 ${escapeHtml(m.ciphertext.slice(0, 80))}…</div>`;
+
+  let bodyHtml = "";
+  if (decrypted.ok) {
+    const parsed = parseMessagePayload(decrypted.text);
+    if (parsed.text) bodyHtml += `<div>${escapeHtml(parsed.text)}</div>`;
+    for (const med of parsed.media) {
+      bodyHtml += renderMediaPlaceholder(med);
+    }
+  } else {
+    bodyHtml = `<div>🔒 ${escapeHtml(m.ciphertext.slice(0, 80))}…</div>`;
+  }
   const replyIndicator = m.replyToId ? `<div class="b-reply-indicator">↳ reply to message</div>` : "";
   return `
     <div class="msg-bubble ${side} ${decrypted.ok ? "" : "encrypted"}" data-id="${m.id}" data-reply-to="${m.replyToId || ""}" data-sender="${opts.senderId || ""}">
-      ${sender}${replyIndicator}${hint}${body}
+      ${sender}${replyIndicator}${hint}${bodyHtml}
       <div class="b-meta">${meta}</div>
       <div class="b-actions">
         <button data-act="reply">reply</button>
@@ -1226,6 +1336,15 @@ function bindBubbleDelete(deleteFn) {
       const senderId = Number(el.dataset.sender) || null;
       showReportModal(id, senderId);
     });
+    for (const mediaEl of el.querySelectorAll(".b-media-item")) {
+      const loadBtn = mediaEl.querySelector('[data-act="load-media"]');
+      if (loadBtn) {
+        loadBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          loadMediaInto(mediaEl);
+        });
+      }
+    }
   }
 }
 
@@ -1284,18 +1403,38 @@ msgEls.keyShow.addEventListener("click", () => {
   msgEls.key.type = msgEls.key.type === "password" ? "text" : "password";
 });
 
+// Build the plaintext payload for a message: JSON envelope if media is attached,
+// otherwise plain text (back-compat with older messages).
+function buildPlaintextPayload(text) {
+  if (state.pendingMedia) {
+    return JSON.stringify({
+      v: 1,
+      text: text,
+      media: [{
+        id: state.pendingMedia.id,
+        key: state.pendingMedia.keyHex,
+        name: state.pendingMedia.name,
+        type: state.pendingMedia.type,
+        size: state.pendingMedia.size,
+      }],
+    });
+  }
+  return text;
+}
+
 msgEls.compose.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!state.activeThread) return;
   const body = msgEls.body.value.trim();
-  if (!body) return;
+  if (!body && !state.pendingMedia) return;
   const hint = msgEls.hint.value.trim();
   const replyToId = state.replyingTo?.id || undefined;
+  const payload = buildPlaintextPayload(body);
   try {
     if (state.activeThread.kind === "dm") {
       const key = msgEls.key.value;
       if (!key) { toast("Pick a vault key or type one", "error"); msgEls.key.focus(); return; }
-      const ciphertext = await encryptText(body, key);
+      const ciphertext = await encryptText(payload, key);
       await api.post("/api/messages", {
         recipientId: state.activeThread.peerId,
         ciphertext,
@@ -1309,10 +1448,12 @@ msgEls.compose.addEventListener("submit", async (e) => {
       }
       msgEls.body.value = "";
       state.replyingTo = null;
+      state.pendingMedia = null;
       renderReplyIndicator();
+      renderAttachIndicator();
       await loadDmMessages(state.activeThread.peerId);
     } else {
-      const ciphertext = await encryptText(body, state.activeThread.key);
+      const ciphertext = await encryptText(payload, state.activeThread.key);
       await api.post(`/api/groups/${state.activeThread.groupId}/messages`, {
         ciphertext,
         hint: hint || undefined,
@@ -1320,7 +1461,9 @@ msgEls.compose.addEventListener("submit", async (e) => {
       });
       msgEls.body.value = "";
       state.replyingTo = null;
+      state.pendingMedia = null;
       renderReplyIndicator();
+      renderAttachIndicator();
       await loadGroupMessages(state.activeThread.groupId);
     }
   } catch (err) { toast(err.message || "Send failed", "error"); }

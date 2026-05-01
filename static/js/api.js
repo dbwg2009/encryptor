@@ -46,10 +46,46 @@ async function request(method, path, body) {
   return parsed;
 }
 
+async function postBinary(path, bytes) {
+  const headers = { "Content-Type": "application/octet-stream", "Accept": "application/json" };
+  const csrf = getCookie("csrf");
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+  const res = await fetch(path, {
+    method: "POST",
+    headers,
+    body: bytes,
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  const text = res.status !== 204 ? await res.text() : "";
+  let parsed = null;
+  if (text) {
+    try { parsed = JSON.parse(text); } catch { parsed = text; }
+  }
+  if (!res.ok) throw new ApiError(res.status, parsed);
+  return parsed;
+}
+
+async function getBinary(path) {
+  const res = await fetch(path, {
+    method: "GET",
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    let parsed = null;
+    try { parsed = await res.json(); } catch {}
+    throw new ApiError(res.status, parsed);
+  }
+  return new Uint8Array(await res.arrayBuffer());
+}
+
 export const api = {
   get:    (p)        => request("GET", p),
   post:   (p, body)  => request("POST", p, body ?? {}),
   put:    (p, body)  => request("PUT", p, body ?? {}),
   del:    (p)        => request("DELETE", p),
+  postBinary,
+  getBinary,
   ApiError,
 };
