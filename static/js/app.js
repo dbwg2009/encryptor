@@ -941,6 +941,89 @@ async function loadModeration() {
   searchInput.addEventListener("input", renderUsersList);
   filterSelect.addEventListener("change", renderUsersList);
 
+  const appeals = await api.get("/api/mod/appeals?status=pending&limit=50");
+  const appealsList = $("mod-appeals-list");
+  appealsList.replaceChildren();
+  if (appeals.entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    const p = document.createElement("p");
+    p.textContent = "No pending appeals.";
+    empty.appendChild(p);
+    appealsList.appendChild(empty);
+  } else {
+    appeals.entries.forEach(appeal => {
+      const row = document.createElement("div");
+      row.className = "report-row";
+      row.style.cssText = "padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.08);";
+
+      const line1 = document.createElement("div");
+      const userB = document.createElement("b");
+      userB.textContent = appeal.userEmail || "unknown";
+      line1.appendChild(userB);
+      line1.appendChild(document.createTextNode(" · " + fmtTime(appeal.createdAt)));
+      row.appendChild(line1);
+
+      const line2 = document.createElement("div");
+      line2.textContent = appeal.reason;
+      row.appendChild(line2);
+
+      const btnDiv = document.createElement("div");
+      btnDiv.style.cssText = "margin-top:8px;display:flex;gap:8px;";
+      const reviewBtn = document.createElement("button");
+      reviewBtn.className = "btn primary";
+      reviewBtn.setAttribute("data-appeal-id", appeal.id);
+      reviewBtn.textContent = "Review";
+      reviewBtn.addEventListener("click", async () => {
+        try {
+          $("appeal-reason-text").textContent = appeal.reason;
+          const decision = await new Promise((resolve) => {
+            const m = $("appeal-review-modal");
+            const decisionSelect = $("appeal-decision");
+            const responseText = $("appeal-response");
+            const submitBtn = $("appeal-submit");
+            const cancelBtn = $("appeal-cancel");
+
+            decisionSelect.value = "";
+            responseText.value = "";
+
+            const close = (v) => {
+              m.classList.add("hidden");
+              submitBtn.removeEventListener("click", onSubmit);
+              cancelBtn.removeEventListener("click", onCancel);
+              resolve(v);
+            };
+            const onSubmit = () => {
+              if (!decisionSelect.value) {
+                decisionSelect.focus();
+                return;
+              }
+              close({ action: decisionSelect.value, reason: responseText.value || null });
+            };
+            const onCancel = () => close(null);
+
+            submitBtn.addEventListener("click", onSubmit);
+            cancelBtn.addEventListener("click", onCancel);
+            m.classList.remove("hidden");
+            decisionSelect.focus();
+          });
+
+          if (!decision) return;
+
+          await api.post(`/api/mod/appeals/${appeal.id}`, { action: decision.action, reason: decision.reason });
+          toast("Appeal reviewed", "info");
+          loadModeration();
+        } catch (e) {
+          toast(`Error: ${e.message}`, "error");
+        }
+      });
+      btnDiv.appendChild(reviewBtn);
+      row.appendChild(btnDiv);
+
+      appealsList.appendChild(row);
+    });
+  }
+
   const auditLog = await api.get("/api/mod/audit-log?limit=50");
   const auditList = $("mod-audit-log");
   auditList.replaceChildren();
@@ -992,11 +1075,17 @@ async function loadModeration() {
   errorEl2.textContent = e.message;
   usersList.replaceChildren(errorEl2);
 
-  const auditList = $("mod-audit-log");
+  const appealsList = $("mod-appeals-list");
   const errorEl3 = document.createElement("p");
   errorEl3.className = "form-error";
   errorEl3.textContent = e.message;
-  auditList.replaceChildren(errorEl3);
+  appealsList.replaceChildren(errorEl3);
+
+  const auditList = $("mod-audit-log");
+  const errorEl4 = document.createElement("p");
+  errorEl4.className = "form-error";
+  errorEl4.textContent = e.message;
+  auditList.replaceChildren(errorEl4);
 }
 
 async function loadSessions() {

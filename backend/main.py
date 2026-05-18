@@ -246,6 +246,18 @@ CREATE TABLE IF NOT EXISTS mod_actions (
 CREATE INDEX IF NOT EXISTS idx_mod_actions_mod ON mod_actions(mod_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mod_actions_target ON mod_actions(target_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mod_actions_time ON mod_actions(created_at DESC);
+CREATE TABLE IF NOT EXISTS appeals (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status      TEXT NOT NULL DEFAULT 'pending',
+  reason      TEXT NOT NULL,
+  response    TEXT,
+  created_at  INTEGER NOT NULL,
+  reviewed_at INTEGER,
+  reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_appeals_user ON appeals(user_id);
+CREATE INDEX IF NOT EXISTS idx_appeals_status ON appeals(status, created_at DESC);
 """
 
 
@@ -1692,6 +1704,124 @@ def get_audit_log(user = Depends(require_moderator), limit: int = 100, offset: i
         "offset": offset,
         "entries": entries
     }
+
+
+@app.post("/api/appeals")
+def create_appeal(body: ModUserActionIn, user = Depends(auth_dep)):
+    """Allow suspended/banned users to appeal their status."""
+    now = int(time.time())
+    with db() as conn:
+        user_row = conn.execute("SELECT id, status FROM users WHERE id = ?", (user["id"],)).fetchone()
+        if user_row["status"] == "active":
+            raise HTTPException(400, "Only suspended or banned users can appeal")
+
+        # Check if user already has a pending appeal
+        existing = conn.execute(
+            "SELECT id FROM appeals WHERE user_id = ? AND status = 'pending'",
+            (user["id"],)
+        ).fetchone()
+        if existing:
+            raise HTTPException(400, "You already have a pending appeal")
+
+        # Create appeal
+        conn.execute(
+            "INSERT INTO appeals (user_id, status, reason, created_at) VALUES (?, ?, ?, ?)",
+            (user["id"], "pending", body.reason, now)
+        )
+
+    return {"ok": True, "message": "Appeal submitted successfully"}
+
+
+@app.get("/api/mod/appeals")
+def get_appeals(user = Depends(require_moderator), status: str = "pending", limit: int = 50, offset: int = 0):
+    """Get appeals for moderator review."""
+    if limit > 500:
+        limit = 500
+    if limit < 1:
+        limit = 1
+    if offset < 0:
+        offset = 0
+
+    with db() as conn:
+        # Get total count
+        query = "SELECT COUNT(*) as cnt FROM appeals"
+        params = []
+        if status:
+            query += " WHERE status = ?"
+            params.append(status)
+        total = conn.execute(query, params).fetchone()["cnt"]
+
+        # Get appeals
+        query = """SELECT a.id, a.user_id, a.status, a.reason, a.response, a.created_at, a.reviewed_at,
+                          a.reviewed_by, u.email
+                   FROM appeals a
+                   LEFT JOIN users u ON a.user_id = u.id"""
+        if status:
+            query += " WHERE a.status = ?"
+        query += " ORDER BY a.created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        rows = conn.execute(query, params).fetchall()
+
+    entries = [
+        {
+            "id": r["id"],
+            "userId": r["user_id"],
+            "userEmail": r["email"],
+            "status": r["status"],
+            "reason": r["reason"],
+            "response": r["response"],
+            "createdAt": r["created_at"],
+            "reviewedAt": r["reviewed_at"]
+        }
+        for r in rows
+    ]
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "entries": entries
+    }
+
+
+@app.post("/api/mod/appeals/{appeal_id}")
+def review_appeal(appeal_id: int, body: ModUserActionIn, user = Depends(require_moderator)):
+    """Review and approve/reject an appeal."""
+    if body.action not in ("approve", "reject"):
+        raise HTTPException(400, "Action must be 'approve' or 'reject'")
+
+    now = int(time.time())
+    with db() as conn:
+        appeal = conn.execute("SELECT user_id, status FROM appeals WHERE id = ?", (appeal_id,)).fetchone()
+        if not appeal:
+            raise HTTPException(404, "Appeal not found")
+        if appeal["status"] != "pending":
+            raise HTTPException(400, "Appeal already reviewed")
+
+        if body.action == "approve":
+            # Restore user
+            conn.execute(
+                "UPDATE users SET status = 'active', suspended_until = NULL WHERE id = ?",
+                (appeal["user_id"],)
+            )
+            new_status = "approved"
+        else:
+            new_status = "rejected"
+
+        # Update appeal
+        conn.execute(
+            "UPDATE appeals SET status = ?, response = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?",
+            (new_status, body.reason, now, user["id"], appeal_id)
+        )
+
+        # Log action
+        conn.execute(
+            "INSERT INTO mod_actions (mod_id, target_id, action, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user["id"], appeal["user_id"], f"appeal_{new_status}", body.reason, now)
+        )
+
+    return {"ok": True, "status": new_status}
 
 
 # ── Session management ────────────────────────────────────────────────────────────

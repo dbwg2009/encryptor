@@ -383,6 +383,12 @@
     </section>
 
     <section class="card">
+      <h3 class="section-h">Pending appeals</h3>
+      <p class="muted small">Users can appeal their suspension or ban with a written reason.</p>
+      <div id="mod-appeals-list" class="table"></div>
+    </section>
+
+    <section class="card">
       <h3 class="section-h">Audit log</h3>
       <p class="muted small">All moderator actions are logged for transparency and accountability.</p>
       <div id="mod-audit-log" class="table"></div>
@@ -539,6 +545,49 @@
     <div class="modal-foot">
       <button class="btn ghost" id="suspension-cancel" type="button">Cancel</button>
       <button class="btn danger" id="suspension-ok" type="button">Suspend</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="appeal-review-modal">
+  <div class="modal-card">
+    <header class="modal-head"><h3>Review appeal</h3></header>
+    <div class="modal-body">
+      <p><b>Appeal reason:</b></p>
+      <p id="appeal-reason-text" style="margin-bottom:12px;"></p>
+      <label class="field">
+        <span>Decision</span>
+        <select id="appeal-decision" required>
+          <option value="">Select decision...</option>
+          <option value="approve">Approve - Restore account</option>
+          <option value="reject">Reject - Keep restriction</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Response to user (optional)</span>
+        <textarea id="appeal-response" placeholder="Explain your decision..." maxlength="500"></textarea>
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="appeal-cancel" type="button">Cancel</button>
+      <button class="btn primary" id="appeal-submit" type="button">Submit decision</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="submit-appeal-modal">
+  <div class="modal-card sm">
+    <header class="modal-head"><h3>Appeal your restriction</h3></header>
+    <form id="submit-appeal-form" class="form">
+      <p class="muted small" style="margin-bottom:12px;">Explain why you believe your restriction should be lifted.</p>
+      <label class="field">
+        <span>Appeal reason</span>
+        <textarea id="appeal-reason-input" required placeholder="Provide details about your appeal..." maxlength="1000"></textarea>
+      </label>
+    </form>
+    <div class="modal-foot">
+      <button class="btn ghost" id="appeal-submit-cancel" type="button">Cancel</button>
+      <button class="btn primary" id="appeal-submit-ok" type="button">Submit appeal</button>
     </div>
   </div>
 </div>
