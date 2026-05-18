@@ -824,7 +824,13 @@ async function loadSettings() {
 
 async function loadModeration() {
   try {
-    const stats = await api.get("/api/mod/stats");
+    const [stats, appealsData, reports, users] = await Promise.all([
+      api.get("/api/mod/stats"),
+      api.get("/api/mod/appeals?status=pending&limit=1"),
+      api.get("/api/mod/reports?limit=100"),
+      api.get("/api/mod/users?limit=200"),
+    ]);
+
     $("mod-total-users").textContent = stats.totalUsers;
     $("mod-active-users").textContent = stats.activeUsers;
     $("mod-suspended-users").textContent = stats.suspendedUsers;
@@ -832,8 +838,6 @@ async function loadModeration() {
     $("mod-total-messages").textContent = stats.totalMessages;
     $("mod-total-reports").textContent = stats.totalReports;
 
-    // Get pending appeals count for badge
-    const appealsData = await api.get("/api/mod/appeals?status=pending&limit=1");
     const pendingAppealCount = appealsData.total;
     $("mod-pending-appeals").textContent = pendingAppealCount;
     const appealsBadge = $("mod-appeals-badge");
@@ -843,8 +847,6 @@ async function loadModeration() {
     } else {
       appealsBadge.style.display = "none";
     }
-
-    const reports = await api.get("/api/mod/reports?limit=100");
   const reportsList = $("mod-reports-list");
   const reportsSearchInput = $("mod-reports-search");
 
@@ -903,7 +905,6 @@ async function loadModeration() {
   renderReports();
   reportsSearchInput.addEventListener("input", renderReports);
 
-  const users = await api.get("/api/mod/users?limit=200");
   const searchInput = $("mod-user-search");
   const filterSelect = $("mod-user-filter");
 

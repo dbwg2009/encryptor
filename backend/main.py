@@ -624,8 +624,8 @@ def login(body: LoginIn, request: Request, response: Response):
         raise HTTPException(403, "Account suspended")
     try:
         hasher.verify(row["auth_hash"], body.authHash.lower())
-    except (VerifyMismatchError, InvalidHash):
-        raise HTTPException(401, "Invalid credentials")
+    except (VerifyMismatchError, InvalidHash) as err:
+        raise HTTPException(401, "Invalid credentials") from err
     make_session(row["id"], request, response)
     _log_login(row["id"], request)
     with db() as conn:
@@ -639,8 +639,8 @@ def verify_password(body: LoginIn, user = Depends(auth_dep)):
         raise HTTPException(403, "Email mismatch")
     try:
         hasher.verify(user["auth_hash"], body.authHash.lower())
-    except (VerifyMismatchError, InvalidHash):
-        raise HTTPException(401, "Wrong password")
+    except (VerifyMismatchError, InvalidHash) as err:
+        raise HTTPException(401, "Wrong password") from err
     return {"ok": True}
 
 
@@ -1850,8 +1850,8 @@ def logout_all(body: DeleteAccountIn, user = Depends(auth_dep)):
     """Logout all other sessions, require password (auth_hash) verification"""
     try:
         hasher.verify(user["auth_hash"], body.authHash.lower())
-    except (VerifyMismatchError, InvalidHash):
-        raise HTTPException(401, "Wrong password")
+    except (VerifyMismatchError, InvalidHash) as err:
+        raise HTTPException(401, "Wrong password") from err
     with db() as conn:
         conn.execute(
             "DELETE FROM sessions WHERE user_id = ? AND id != ?",
