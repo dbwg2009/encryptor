@@ -795,44 +795,62 @@ async function loadModeration() {
 
     const reports = await api.get("/api/mod/reports?limit=100");
   const reportsList = $("mod-reports-list");
-  reportsList.replaceChildren();
-  if (reports.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    const p = document.createElement("p");
-    p.textContent = "No recent reports.";
-    empty.appendChild(p);
-    reportsList.appendChild(empty);
-  } else {
-    reports.forEach(r => {
-      const reportRow = document.createElement("div");
-      reportRow.className = "report-row";
-      reportRow.style.cssText = "padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.08);";
-      
-      const line1 = document.createElement("div");
-      const reasonB = document.createElement("b");
-      reasonB.textContent = r.reason;
-      line1.appendChild(reasonB);
-      line1.appendChild(document.createTextNode(" · " + fmtTime(r.createdAt)));
-      reportRow.appendChild(line1);
-      
-      const line2 = document.createElement("div");
-      line2.className = "muted small";
-      line2.textContent = "Reporter: " + (r.reporterEmail || "unknown") + " · Reported: " + (r.reportedUserEmail || "unknown");
-      reportRow.appendChild(line2);
-      
-      const line3 = document.createElement("div");
-      line3.textContent = r.details || "No additional details.";
-      reportRow.appendChild(line3);
-      
-      const line4 = document.createElement("div");
-      line4.className = "muted small";
-      line4.textContent = "DM " + (r.messageId ? "id " + r.messageId : r.groupMessageId ? "group id " + r.groupMessageId : "user report");
-      reportRow.appendChild(line4);
-      
-      reportsList.appendChild(reportRow);
+  const searchInput = $("mod-reports-search");
+
+  const renderReports = () => {
+    const searchTerm = searchInput.value.toLowerCase();
+    let filtered = reports.filter(r => {
+      const searchText = [
+        r.reason,
+        r.details || "",
+        r.reporterEmail || "",
+        r.reportedUserEmail || ""
+      ].join(" ").toLowerCase();
+      return searchText.includes(searchTerm);
     });
-  }
+
+    reportsList.replaceChildren();
+    if (filtered.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      const p = document.createElement("p");
+      p.textContent = filtered.length !== reports.length ? "No matching reports." : "No recent reports.";
+      empty.appendChild(p);
+      reportsList.appendChild(empty);
+    } else {
+      filtered.forEach(r => {
+        const reportRow = document.createElement("div");
+        reportRow.className = "report-row";
+        reportRow.style.cssText = "padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.08);";
+
+        const line1 = document.createElement("div");
+        const reasonB = document.createElement("b");
+        reasonB.textContent = r.reason;
+        line1.appendChild(reasonB);
+        line1.appendChild(document.createTextNode(" · " + fmtTime(r.createdAt)));
+        reportRow.appendChild(line1);
+
+        const line2 = document.createElement("div");
+        line2.className = "muted small";
+        line2.textContent = "Reporter: " + (r.reporterEmail || "unknown") + " · Reported: " + (r.reportedUserEmail || "unknown");
+        reportRow.appendChild(line2);
+
+        const line3 = document.createElement("div");
+        line3.textContent = r.details || "No additional details.";
+        reportRow.appendChild(line3);
+
+        const line4 = document.createElement("div");
+        line4.className = "muted small";
+        line4.textContent = "DM " + (r.messageId ? "id " + r.messageId : r.groupMessageId ? "group id " + r.groupMessageId : "user report");
+        reportRow.appendChild(line4);
+
+        reportsList.appendChild(reportRow);
+      });
+    }
+  };
+
+  renderReports();
+  searchInput.addEventListener("input", renderReports);
 
   const users = await api.get("/api/mod/users?limit=200");
   const searchInput = $("mod-user-search");
