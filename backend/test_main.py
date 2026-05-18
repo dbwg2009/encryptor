@@ -1,6 +1,11 @@
 """Comprehensive API tests for the XorCrypt backend."""
 import pytest
 
+# Valid 32-char hex string for authSalt
+VALID_SALT = "0" * 32
+# Valid 64-char hex string for authHash
+VALID_HASH = "1" * 64
+
 
 class TestAuthEndpoints:
     """Tests for authentication endpoints."""
@@ -10,7 +15,7 @@ class TestAuthEndpoints:
         response = client.post("/api/auth/preflight", json={"email": "new@example.com"})
         assert response.status_code == 200
         data = response.json()
-        assert "auth_salt" in data
+        assert "authSalt" in data
 
     def test_register_success(self, client):
         """Test successful user registration."""
@@ -18,8 +23,9 @@ class TestAuthEndpoints:
             "/api/auth/register",
             json={
                 "email": "newuser@example.com",
-                "auth_hash": "test_hash_value",
-                "registration_token": "test_token",
+                "authSalt": VALID_SALT,
+                "authHash": VALID_HASH,
+                "registrationToken": "test_token",
             },
         )
         assert response.status_code == 201
@@ -32,8 +38,9 @@ class TestAuthEndpoints:
             "/api/auth/register",
             json={
                 "email": registered_user["email"],
-                "auth_hash": "different_hash",
-                "registration_token": "test_token",
+                "authSalt": VALID_SALT,
+                "authHash": "2" * 64,
+                "registrationToken": "test_token",
             },
         )
         assert response.status_code == 409
@@ -44,8 +51,9 @@ class TestAuthEndpoints:
             "/api/auth/register",
             json={
                 "email": "newuser@example.com",
-                "auth_hash": "test_hash",
-                "registration_token": "invalid_token",
+                "authSalt": VALID_SALT,
+                "authHash": VALID_HASH,
+                "registrationToken": "invalid_token",
             },
         )
         assert response.status_code == 403
@@ -56,7 +64,7 @@ class TestAuthEndpoints:
             "/api/auth/login",
             json={
                 "email": registered_user["email"],
-                "auth_hash": registered_user["auth_hash"],
+                "authHash": registered_user["authHash"],
             },
         )
         assert response.status_code == 200
@@ -68,7 +76,7 @@ class TestAuthEndpoints:
             "/api/auth/login",
             json={
                 "email": registered_user["email"],
-                "auth_hash": "wrong_hash",
+                "authHash": "2" * 64,
             },
         )
         assert response.status_code == 401
@@ -79,7 +87,7 @@ class TestAuthEndpoints:
             "/api/auth/login",
             json={
                 "email": "nonexistent@example.com",
-                "auth_hash": "some_hash",
+                "authHash": VALID_HASH,
             },
         )
         assert response.status_code == 401
@@ -90,7 +98,7 @@ class TestAuthEndpoints:
             "/api/auth/verify",
             json={
                 "email": logged_in_user["email"],
-                "auth_hash": logged_in_user["auth_hash"],
+                "authHash": logged_in_user["authHash"],
             },
         )
         assert response.status_code == 200
@@ -117,13 +125,13 @@ class TestAuthEndpoints:
 
     def test_change_password(self, client, logged_in_user):
         """Test password change."""
-        new_hash = "new_auth_hash_value"
         response = client.post(
             "/api/auth/change-password",
             json={
-                "email": logged_in_user["email"],
-                "old_auth_hash": logged_in_user["auth_hash"],
-                "new_auth_hash": new_hash,
+                "currentAuthHash": logged_in_user["authHash"],
+                "newAuthSalt": "3" * 32,
+                "newAuthHash": "4" * 64,
+                "rewrappedItems": [],
             },
         )
         assert response.status_code == 200
@@ -133,9 +141,10 @@ class TestAuthEndpoints:
         response = client.post(
             "/api/auth/change-password",
             json={
-                "email": logged_in_user["email"],
-                "old_auth_hash": "wrong_hash",
-                "new_auth_hash": "new_hash",
+                "currentAuthHash": "2" * 64,
+                "newAuthSalt": "3" * 32,
+                "newAuthHash": "4" * 64,
+                "rewrappedItems": [],
             },
         )
         assert response.status_code == 401
@@ -362,7 +371,8 @@ class TestHealthEndpoint:
         response = client.get("/api/health")
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "ok"
+        assert data["ok"] is True
+        assert "time" in data
 
 
 class TestUnauthenticatedAccess:
