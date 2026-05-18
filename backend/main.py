@@ -1682,8 +1682,8 @@ def get_audit_log(user = Depends(require_moderator), limit: int = 100, offset: i
         # Get audit log entries ordered by most recent first
         rows = conn.execute(
             """SELECT ma.id, ma.mod_id, ma.target_id, ma.action, ma.reason, ma.created_at,
-                      mod_user.username as mod_username,
-                      target_user.username as target_username
+                      mod_user.email as mod_email,
+                      target_user.email as target_email
                FROM mod_actions ma
                LEFT JOIN users mod_user ON ma.mod_id = mod_user.id
                LEFT JOIN users target_user ON ma.target_id = target_user.id
@@ -1696,9 +1696,9 @@ def get_audit_log(user = Depends(require_moderator), limit: int = 100, offset: i
         {
             "id": r["id"],
             "modId": r["mod_id"],
-            "modUsername": r["mod_username"],
+            "modUsername": r["mod_email"],
             "targetId": r["target_id"],
-            "targetUsername": r["target_username"],
+            "targetUsername": r["target_email"],
             "action": r["action"],
             "reason": r["reason"],
             "createdAt": r["created_at"]
