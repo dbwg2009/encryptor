@@ -823,102 +823,123 @@ async function loadModeration() {
   }
 
   const users = await api.get("/api/mod/users?limit=200");
-  const usersList = $("mod-users-list");
-  usersList.replaceChildren();
-  if (users.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    const p = document.createElement("p");
-    p.textContent = "No user accounts.";
-    empty.appendChild(p);
-    usersList.appendChild(empty);
-  } else {
-    users.forEach(u => {
-      const sessionItem = document.createElement("div");
-      sessionItem.className = "session-item";
-      sessionItem.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;";
-      
-      const leftDiv = document.createElement("div");
-      leftDiv.style.cssText = "min-width:0;";
-      
-      const emailDiv = document.createElement("div");
-      const emailB = document.createElement("b");
-      emailB.textContent = u.email;
-      emailDiv.appendChild(emailB);
-      if (u.role === "moderator") {
-        const hint = document.createElement("span");
-        hint.className = "hint";
-        hint.textContent = "(moderator)";
-        emailDiv.appendChild(document.createTextNode(" "));
-        emailDiv.appendChild(hint);
-      }
-      leftDiv.appendChild(emailDiv);
-      
-      const statusDiv = document.createElement("div");
-      statusDiv.className = "muted small";
-      statusDiv.textContent = "Status: " + u.status + " · Created " + fmtTime(u.createdAt) + " · Last login " + fmtTime(u.lastLoginAt);
-      leftDiv.appendChild(statusDiv);
-      
-      sessionItem.appendChild(leftDiv);
-      
-      const rightDiv = document.createElement("div");
-      rightDiv.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;";
-      
-      if (u.status !== "suspended" && u.status !== "banned") {
-        const suspendBtn = document.createElement("button");
-        suspendBtn.className = "btn ghost";
-        suspendBtn.setAttribute("data-mod-action", "suspend");
-        suspendBtn.setAttribute("data-user-id", u.id);
-        suspendBtn.textContent = "Suspend";
-        rightDiv.appendChild(suspendBtn);
-        
-        const banBtn = document.createElement("button");
-        banBtn.className = "btn ghost";
-        banBtn.setAttribute("data-mod-action", "ban");
-        banBtn.setAttribute("data-user-id", u.id);
-        banBtn.textContent = "Ban";
-        rightDiv.appendChild(banBtn);
-      }
-      
-      if (u.status !== "active") {
-        const restoreBtn = document.createElement("button");
-        restoreBtn.className = "btn primary";
-        restoreBtn.setAttribute("data-mod-action", "restore");
-        restoreBtn.setAttribute("data-user-id", u.id);
-        restoreBtn.textContent = "Restore";
-        rightDiv.appendChild(restoreBtn);
-      }
-      
-      sessionItem.appendChild(rightDiv);
-      usersList.appendChild(sessionItem);
+  const searchInput = $("mod-user-search");
+  const filterSelect = $("mod-user-filter");
+
+  const renderUsersList = () => {
+    const searchTerm = searchInput.value.toLowerCase();
+    const filterStatus = filterSelect.value;
+
+    let filtered = users.filter(u => {
+      const matchesSearch = u.email.toLowerCase().includes(searchTerm);
+      const matchesFilter = !filterStatus ||
+        (filterStatus === "moderator" ? u.role === "moderator" : u.status === filterStatus);
+      return matchesSearch && matchesFilter;
     });
-    for (const btn of usersList.querySelectorAll("[data-mod-action]")) {
-      btn.addEventListener("click", async () => {
-        try {
-          const action = btn.dataset.modAction;
-          const userId = Number(btn.dataset.userId);
 
-          let suspensionData = null;
-          if (action === "suspend") {
-            suspensionData = await suspensionDialog();
-            if (!suspensionData) return;
-          } else {
-            const confirmText = action === "ban" ? "Ban this account?" : "Restore this account?";
-            const ok = await confirmDialog({ title: confirmText, body: "This change affects sign-in and messaging rights.", okText: action === "ban" ? "Ban" : "Restore", danger: action !== "restore" });
-            if (!ok) return;
-          }
+    const usersList = $("mod-users-list");
+    usersList.replaceChildren();
 
-          const payload = { action, ...(suspensionData ? { duration_days: suspensionData.durationDays, reason: suspensionData.reason } : {}) };
-          await api.post(`/api/mod/users/${userId}/status`, payload);
-          const actionLabel = { suspend: "suspended", ban: "banned", restore: "restored" }[action];
-          toast(`Account ${actionLabel}`, "info");
-          loadModeration();
-        } catch (e) {
-          toast(`Error: ${e.message}`, "error");
+    if (filtered.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      const p = document.createElement("p");
+      p.textContent = filtered.length !== users.length ? "No matching users." : "No user accounts.";
+      empty.appendChild(p);
+      usersList.appendChild(empty);
+    } else {
+      filtered.forEach(u => {
+        const sessionItem = document.createElement("div");
+        sessionItem.className = "session-item";
+        sessionItem.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;";
+
+        const leftDiv = document.createElement("div");
+        leftDiv.style.cssText = "min-width:0;";
+
+        const emailDiv = document.createElement("div");
+        const emailB = document.createElement("b");
+        emailB.textContent = u.email;
+        emailDiv.appendChild(emailB);
+        if (u.role === "moderator") {
+          const hint = document.createElement("span");
+          hint.className = "hint";
+          hint.textContent = "(moderator)";
+          emailDiv.appendChild(document.createTextNode(" "));
+          emailDiv.appendChild(hint);
         }
+        leftDiv.appendChild(emailDiv);
+
+        const statusDiv = document.createElement("div");
+        statusDiv.className = "muted small";
+        statusDiv.textContent = "Status: " + u.status + " · Created " + fmtTime(u.createdAt) + " · Last login " + fmtTime(u.lastLoginAt);
+        leftDiv.appendChild(statusDiv);
+
+        sessionItem.appendChild(leftDiv);
+
+        const rightDiv = document.createElement("div");
+        rightDiv.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;";
+
+        if (u.status !== "suspended" && u.status !== "banned") {
+          const suspendBtn = document.createElement("button");
+          suspendBtn.className = "btn ghost";
+          suspendBtn.setAttribute("data-mod-action", "suspend");
+          suspendBtn.setAttribute("data-user-id", u.id);
+          suspendBtn.textContent = "Suspend";
+          rightDiv.appendChild(suspendBtn);
+
+          const banBtn = document.createElement("button");
+          banBtn.className = "btn ghost";
+          banBtn.setAttribute("data-mod-action", "ban");
+          banBtn.setAttribute("data-user-id", u.id);
+          banBtn.textContent = "Ban";
+          rightDiv.appendChild(banBtn);
+        }
+
+        if (u.status !== "active") {
+          const restoreBtn = document.createElement("button");
+          restoreBtn.className = "btn primary";
+          restoreBtn.setAttribute("data-mod-action", "restore");
+          restoreBtn.setAttribute("data-user-id", u.id);
+          restoreBtn.textContent = "Restore";
+          rightDiv.appendChild(restoreBtn);
+        }
+
+        sessionItem.appendChild(rightDiv);
+        usersList.appendChild(sessionItem);
       });
+
+      for (const btn of usersList.querySelectorAll("[data-mod-action]")) {
+        btn.addEventListener("click", async () => {
+          try {
+            const action = btn.dataset.modAction;
+            const userId = Number(btn.dataset.userId);
+
+            let suspensionData = null;
+            if (action === "suspend") {
+              suspensionData = await suspensionDialog();
+              if (!suspensionData) return;
+            } else {
+              const confirmText = action === "ban" ? "Ban this account?" : "Restore this account?";
+              const ok = await confirmDialog({ title: confirmText, body: "This change affects sign-in and messaging rights.", okText: action === "ban" ? "Ban" : "Restore", danger: action !== "restore" });
+              if (!ok) return;
+            }
+
+            const payload = { action, ...(suspensionData ? { duration_days: suspensionData.durationDays, reason: suspensionData.reason } : {}) };
+            await api.post(`/api/mod/users/${userId}/status`, payload);
+            const actionLabel = { suspend: "suspended", ban: "banned", restore: "restored" }[action];
+            toast(`Account ${actionLabel}`, "info");
+            loadModeration();
+          } catch (e) {
+            toast(`Error: ${e.message}`, "error");
+          }
+        });
+      }
     }
-  }
+  };
+
+  renderUsersList();
+  searchInput.addEventListener("input", renderUsersList);
+  filterSelect.addEventListener("change", renderUsersList);
 
   const auditLog = await api.get("/api/mod/audit-log?limit=50");
   const auditList = $("mod-audit-log");

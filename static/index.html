@@ -369,6 +369,16 @@
     <section class="card">
       <h3 class="section-h">User accounts</h3>
       <p class="muted small">Suspend or ban an account to stop abusive activity.</p>
+      <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+        <input type="text" id="mod-user-search" placeholder="Search by email..." style="flex:1;min-width:200px;">
+        <select id="mod-user-filter" style="min-width:150px;">
+          <option value="">All users</option>
+          <option value="active">Active only</option>
+          <option value="suspended">Suspended only</option>
+          <option value="banned">Banned only</option>
+          <option value="moderator">Moderators only</option>
+        </select>
+      </div>
       <div id="mod-users-list" class="table"></div>
     </section>
 
