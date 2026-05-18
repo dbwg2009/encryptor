@@ -500,7 +500,7 @@ class ReportIn(BaseModel):
     reportedUserId: Optional[int] = None
     messageId: Optional[int] = None
     groupMessageId: Optional[int] = None
-    reason: str = Field(min_length=5, max_length=500)
+    reason: str = Field(min_length=1, max_length=500)
     details: Optional[str] = Field(default=None, max_length=2000)
 
 
