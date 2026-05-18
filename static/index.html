@@ -356,7 +356,16 @@
         <div class="metric-card"><div class="metric-label">Suspended</div><div class="metric-value" id="mod-suspended-users">0</div></div>
         <div class="metric-card"><div class="metric-label">Banned</div><div class="metric-value" id="mod-banned-users">0</div></div>
         <div class="metric-card"><div class="metric-label">Messages</div><div class="metric-value" id="mod-total-messages">0</div></div>
-        <div class="metric-card"><div class="metric-label">Reports</div><div class="metric-value" id="mod-total-reports">0</div></div>
+        <div class="metric-card" style="position:relative;">
+          <div class="metric-label">Reports</div>
+          <div class="metric-value" id="mod-total-reports">0</div>
+          <div id="mod-unreviewed-badge" style="display:none;position:absolute;top:8px;right:8px;background:#ff5454;color:white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;"></div>
+        </div>
+        <div class="metric-card" style="position:relative;">
+          <div class="metric-label">Appeals</div>
+          <div class="metric-value" id="mod-pending-appeals">0</div>
+          <div id="mod-appeals-badge" style="display:none;position:absolute;top:8px;right:8px;background:#ff5454;color:white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;"></div>
+        </div>
       </div>
     </section>
 

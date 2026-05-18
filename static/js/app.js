@@ -781,6 +781,18 @@ async function loadModeration() {
     $("mod-total-messages").textContent = stats.totalMessages;
     $("mod-total-reports").textContent = stats.totalReports;
 
+    // Get pending appeals count for badge
+    const appealsData = await api.get("/api/mod/appeals?status=pending&limit=1");
+    const pendingAppealCount = appealsData.total;
+    $("mod-pending-appeals").textContent = pendingAppealCount;
+    const appealsBadge = $("mod-appeals-badge");
+    if (pendingAppealCount > 0) {
+      appealsBadge.textContent = pendingAppealCount > 99 ? "99+" : pendingAppealCount;
+      appealsBadge.style.display = "flex";
+    } else {
+      appealsBadge.style.display = "none";
+    }
+
     const reports = await api.get("/api/mod/reports?limit=100");
   const reportsList = $("mod-reports-list");
   reportsList.replaceChildren();
