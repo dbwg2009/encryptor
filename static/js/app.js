@@ -874,6 +874,44 @@ async function loadModeration() {
       });
     }
   }
+
+  const auditLog = await api.get("/api/mod/audit-log?limit=50");
+  const auditList = $("mod-audit-log");
+  auditList.replaceChildren();
+  if (auditLog.entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    const p = document.createElement("p");
+    p.textContent = "No recent actions.";
+    empty.appendChild(p);
+    auditList.appendChild(empty);
+  } else {
+    auditLog.entries.forEach(entry => {
+      const row = document.createElement("div");
+      row.className = "report-row";
+      row.style.cssText = "padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.08);";
+
+      const line1 = document.createElement("div");
+      const actionB = document.createElement("b");
+      actionB.textContent = entry.action;
+      line1.appendChild(actionB);
+      line1.appendChild(document.createTextNode(" · " + fmtTime(entry.createdAt)));
+      row.appendChild(line1);
+
+      const line2 = document.createElement("div");
+      line2.className = "muted small";
+      line2.textContent = "By: " + (entry.modUsername || "unknown") + " → Target: " + (entry.targetUsername || "unknown");
+      row.appendChild(line2);
+
+      if (entry.reason) {
+        const line3 = document.createElement("div");
+        line3.textContent = entry.reason;
+        row.appendChild(line3);
+      }
+
+      auditList.appendChild(row);
+    });
+  }
 } catch (e) {
   const reportsList = $("mod-reports-list");
   const usersList = $("mod-users-list");
@@ -887,6 +925,12 @@ async function loadModeration() {
   errorEl2.className = "form-error";
   errorEl2.textContent = e.message;
   usersList.replaceChildren(errorEl2);
+
+  const auditList = $("mod-audit-log");
+  const errorEl3 = document.createElement("p");
+  errorEl3.className = "form-error";
+  errorEl3.textContent = e.message;
+  auditList.replaceChildren(errorEl3);
 }
 
 async function loadSessions() {

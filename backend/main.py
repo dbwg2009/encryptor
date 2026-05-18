@@ -235,6 +235,17 @@ CREATE TABLE IF NOT EXISTS group_invites (
 );
 CREATE INDEX IF NOT EXISTS idx_group_invites_invitee ON group_invites(invitee_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_group_invites_group   ON group_invites(group_id);
+CREATE TABLE IF NOT EXISTS mod_actions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  mod_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  action      TEXT NOT NULL,
+  reason      TEXT,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mod_actions_mod ON mod_actions(mod_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mod_actions_target ON mod_actions(target_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mod_actions_time ON mod_actions(created_at DESC);
 """
 
 
@@ -1594,6 +1605,16 @@ def mod_user_status(user_id: int, body: ModUserActionIn, user = Depends(require_
             (new_status, suspended_until, user_id)
         )
 
+        # Log action to audit log
+        action_str = body.action
+        if body.action == "suspend" and body.duration_days:
+            action_str = f"suspend_{body.duration_days}d"
+
+        conn.execute(
+            "INSERT INTO mod_actions (mod_id, target_id, action, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user["id"], user_id, action_str, body.reason, now)
+        )
+
         # Revoke sessions if suspending or banning
         if new_status in ("banned", "suspended"):
             conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
@@ -1608,13 +1629,69 @@ def mod_change_role(user_id: int, body: ModChangeRoleIn, user = Depends(require_
     if not is_super_moderator(user):
         raise HTTPException(403, "Only super moderators can change roles")
 
+    now = int(time.time())
     with db() as conn:
         target = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
         if not target:
             raise HTTPException(404, "User not found")
         conn.execute("UPDATE users SET role = ? WHERE id = ?", (body.new_role, user_id))
 
+        # Log action to audit log
+        conn.execute(
+            "INSERT INTO mod_actions (mod_id, target_id, action, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user["id"], user_id, f"role_change_{body.new_role}", f"Changed from {target['role']}", now)
+        )
+
     return {"ok": True, "newRole": body.new_role}
+
+
+@app.get("/api/mod/audit-log")
+def get_audit_log(user = Depends(require_moderator), limit: int = 100, offset: int = 0):
+    """Get audit log of moderator actions. Limited to 100 entries by default."""
+    if limit > 500:
+        limit = 500
+    if limit < 1:
+        limit = 1
+    if offset < 0:
+        offset = 0
+
+    with db() as conn:
+        # Get total count
+        total = conn.execute("SELECT COUNT(*) as cnt FROM mod_actions").fetchone()["cnt"]
+
+        # Get audit log entries ordered by most recent first
+        rows = conn.execute(
+            """SELECT ma.id, ma.mod_id, ma.target_id, ma.action, ma.reason, ma.created_at,
+                      mod_user.username as mod_username,
+                      target_user.username as target_username
+               FROM mod_actions ma
+               LEFT JOIN users mod_user ON ma.mod_id = mod_user.id
+               LEFT JOIN users target_user ON ma.target_id = target_user.id
+               ORDER BY ma.created_at DESC
+               LIMIT ? OFFSET ?""",
+            (limit, offset)
+        ).fetchall()
+
+    entries = [
+        {
+            "id": r["id"],
+            "modId": r["mod_id"],
+            "modUsername": r["mod_username"],
+            "targetId": r["target_id"],
+            "targetUsername": r["target_username"],
+            "action": r["action"],
+            "reason": r["reason"],
+            "createdAt": r["created_at"]
+        }
+        for r in rows
+    ]
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "entries": entries
+    }
 
 
 # ── Session management ────────────────────────────────────────────────────────────
