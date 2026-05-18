@@ -59,6 +59,42 @@ function confirmDialog({ title, body, okText = "Confirm", danger = true }) {
   });
 }
 
+function suspensionDialog() {
+  return new Promise((resolve) => {
+    const m = $("suspension-modal");
+    const form = $("suspension-form");
+    const duration = $("suspension-duration");
+    const reason = $("suspension-reason");
+    const ok = $("suspension-ok");
+    const cancel = $("suspension-cancel");
+
+    form.reset();
+
+    const close = (v) => {
+      m.classList.add("hidden");
+      ok.removeEventListener("click", onOk);
+      cancel.removeEventListener("click", onCancel);
+      form.removeEventListener("submit", onSubmit);
+      resolve(v);
+    };
+    const onOk = () => {
+      if (!duration.value) {
+        duration.focus();
+        return;
+      }
+      close({ durationDays: Number(duration.value), reason: reason.value || null });
+    };
+    const onCancel = () => close(null);
+    const onSubmit = (e) => { e.preventDefault(); onOk(); };
+
+    ok.addEventListener("click", onOk);
+    cancel.addEventListener("click", onCancel);
+    form.addEventListener("submit", onSubmit);
+    m.classList.remove("hidden");
+    duration.focus();
+  });
+}
+
 function fmtTime(unix) {
   if (!unix) return "—";
   const d = new Date(unix * 1000);
@@ -861,10 +897,19 @@ async function loadModeration() {
         try {
           const action = btn.dataset.modAction;
           const userId = Number(btn.dataset.userId);
-          const confirmText = action === "ban" ? "Ban this account?" : action === "suspend" ? "Suspend this account?" : "Restore this account?";
-          const ok = await confirmDialog({ title: confirmText, body: "This change affects sign-in and messaging rights.", okText: action === "restore" ? "Restore" : action === "ban" ? "Ban" : "Suspend", danger: action !== "restore" });
-          if (!ok) return;
-          await api.post(`/api/mod/users/${userId}/status`, { action });
+
+          let suspensionData = null;
+          if (action === "suspend") {
+            suspensionData = await suspensionDialog();
+            if (!suspensionData) return;
+          } else {
+            const confirmText = action === "ban" ? "Ban this account?" : "Restore this account?";
+            const ok = await confirmDialog({ title: confirmText, body: "This change affects sign-in and messaging rights.", okText: action === "ban" ? "Ban" : "Restore", danger: action !== "restore" });
+            if (!ok) return;
+          }
+
+          const payload = { action, ...(suspensionData ? { duration_days: suspensionData.durationDays, reason: suspensionData.reason } : {}) };
+          await api.post(`/api/mod/users/${userId}/status`, payload);
           const actionLabel = { suspend: "suspended", ban: "banned", restore: "restored" }[action];
           toast(`Account ${actionLabel}`, "info");
           loadModeration();
