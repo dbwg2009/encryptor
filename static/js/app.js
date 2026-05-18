@@ -181,6 +181,8 @@ const state = {
   route: "cipher",
   cipherMode: "encrypt",
   showKey: false,
+  modMode: false,
+  modRoute: "dashboard",
 };
 
 function setView(name) {
@@ -189,12 +191,13 @@ function setView(name) {
   }
 }
 function updateModeratorTab() {
-  const tab = document.querySelector('#main-tabs .tab[data-route="moderation"]');
-  if (!tab) return;
-  tab.classList.toggle("hidden", !state.user?.isModerator);
+  const btn = $("mod-mode-btn");
+  if (!btn) return;
+  btn.classList.toggle("hidden", !state.user?.isModerator || state.modMode);
 }
 function setRoute(r) {
-  if (r === "moderation" && !state.user?.isModerator) r = "cipher";
+  if (r === "moderation") { enterModMode(); return; }
+  if (state.modMode) return;
   state.route = r;
   for (const t of $$("#main-tabs .tab")) t.classList.toggle("active", t.dataset.route === r);
   for (const p of ["cipher", "vault", "messages", "history", "settings", "moderation"]) {
@@ -205,8 +208,45 @@ function setRoute(r) {
   if (r === "history")  loadHistory();
   if (r === "settings") loadSettings();
   if (r === "messages") loadThreads();
-  if (r === "moderation") loadModeration();
   location.hash = r;
+}
+
+function setModRoute(name) {
+  state.modRoute = name;
+  for (const t of $$("#mod-tabs .tab")) t.classList.toggle("active", t.dataset.modRoute === name);
+  for (const p of ["dashboard", "reports", "users", "appeals", "audit"]) {
+    $(`mod-pane-${p}`).classList.toggle("hidden", p !== name);
+  }
+  location.hash = "mod/" + name;
+}
+
+function enterModMode() {
+  if (!state.user?.isModerator) return;
+  state.modMode = true;
+  $("main-tabs").classList.add("hidden");
+  $("mod-tabs").classList.remove("hidden");
+  for (const p of ["cipher", "vault", "messages", "history", "settings"]) {
+    $(`tab-${p}`).classList.add("hidden");
+    $(`tab-${p}`).classList.remove("active");
+  }
+  $("tab-moderation").classList.remove("hidden");
+  $("tab-moderation").classList.add("active");
+  $("mod-mode-btn").textContent = "exit mod";
+  $("mod-mode-btn").title = "Back to app";
+  setModRoute(state.modRoute || "dashboard");
+  loadModeration();
+}
+
+function exitModMode() {
+  state.modMode = false;
+  $("main-tabs").classList.remove("hidden");
+  $("mod-tabs").classList.add("hidden");
+  $("tab-moderation").classList.add("hidden");
+  $("tab-moderation").classList.remove("active");
+  $("mod-mode-btn").textContent = "mod";
+  $("mod-mode-btn").title = "Switch to moderator mode";
+  updateModeratorTab();
+  setRoute(state.route || "cipher");
 }
 
 // ─── Auth view ─────────────────────────────────────────────────
@@ -847,6 +887,13 @@ async function loadModeration() {
     } else {
       appealsBadge.style.display = "none";
     }
+    const appealsCount = $("mod-appeals-count");
+    if (pendingAppealCount > 0) {
+      appealsCount.textContent = pendingAppealCount > 99 ? "99+" : pendingAppealCount;
+      appealsCount.style.display = "";
+    } else {
+      appealsCount.style.display = "none";
+    }
 
     const reportsList = $("mod-reports-list");
     const reportsSearchInput = $("mod-reports-search");
@@ -908,6 +955,7 @@ async function loadModeration() {
 
     const searchInput = $("mod-user-search");
     const filterSelect = $("mod-user-filter");
+    const usersList = $("mod-users-list");
 
     const renderUsersList = () => {
     const searchTerm = searchInput.value.toLowerCase();
@@ -920,7 +968,6 @@ async function loadModeration() {
       return matchesSearch && matchesFilter;
     });
 
-    const usersList = $("mod-users-list");
     usersList.replaceChildren();
 
     if (filtered.length === 0) {
@@ -1323,9 +1370,20 @@ $("delete-account-form").addEventListener("submit", async (e) => {
 
 // ─── Routing ───────────────────────────────────────────────────
 for (const t of $$("#main-tabs .tab")) t.addEventListener("click", () => setRoute(t.dataset.route));
+for (const t of $$("#mod-tabs .tab")) t.addEventListener("click", () => setModRoute(t.dataset.modRoute));
+$("mod-mode-btn").addEventListener("click", () => state.modMode ? exitModMode() : enterModMode());
 window.addEventListener("hashchange", () => {
-  const r = location.hash.slice(1);
-  if (["cipher","vault","messages","history","settings","moderation"].includes(r)) setRoute(r);
+  const h = location.hash.slice(1);
+  if (h.startsWith("mod/")) {
+    const sub = h.slice(4);
+    if (["dashboard","reports","users","appeals","audit"].includes(sub)) {
+      if (!state.modMode) enterModMode();
+      else setModRoute(sub);
+    }
+  } else if (["cipher","vault","messages","history","settings"].includes(h)) {
+    if (state.modMode) exitModMode();
+    setRoute(h);
+  }
 });
 
 // ─── Keyboard shortcuts ────────────────────────────────────────
