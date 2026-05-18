@@ -914,7 +914,7 @@ async function loadModeration() {
     let filtered = users.filter(u => {
       const matchesSearch = u.email.toLowerCase().includes(searchTerm);
       const matchesFilter = !filterStatus ||
-        (filterStatus === "moderator" ? u.role === "moderator" : u.status === filterStatus);
+        (filterStatus === "moderator" ? u.role === "moderator" || u.role === "super_moderator" : u.status === filterStatus);
       return matchesSearch && matchesFilter;
     });
 
@@ -941,10 +941,11 @@ async function loadModeration() {
         const emailB = document.createElement("b");
         emailB.textContent = u.email;
         emailDiv.appendChild(emailB);
-        if (u.role === "moderator") {
+        if (u.role === "moderator" || u.role === "super_moderator") {
           const hint = document.createElement("span");
           hint.className = "hint";
-          hint.textContent = "(moderator)";
+          hint.textContent = u.role === "super_moderator" ? "(super moderator)" : "(moderator)";
+          hint.style.cssText = u.role === "super_moderator" ? "color:#ffa500;font-weight:bold;" : "";
           emailDiv.appendChild(document.createTextNode(" "));
           emailDiv.appendChild(hint);
         }
@@ -989,38 +990,41 @@ async function loadModeration() {
         usersList.appendChild(sessionItem);
       });
 
-      for (const btn of usersList.querySelectorAll("[data-mod-action]")) {
-        btn.addEventListener("click", async () => {
-          try {
-            const action = btn.dataset.modAction;
-            const userId = Number(btn.dataset.userId);
-
-            let actionData = null;
-            if (action === "suspend") {
-              actionData = await suspensionDialog();
-              if (!actionData) return;
-            } else if (action === "ban" || action === "restore") {
-              const title = action === "ban" ? "Ban this account?" : "Restore this account?";
-              actionData = await actionDialog(title);
-              if (!actionData) return;
-            }
-
-            const payload = { action, ...(actionData && actionData.durationDays ? { duration_days: actionData.durationDays } : {}), ...(actionData && actionData.reason ? { reason: actionData.reason } : {}) };
-            await api.post(`/api/mod/users/${userId}/status`, payload);
-            const actionLabel = { suspend: "suspended", ban: "banned", restore: "restored" }[action];
-            toast(`Account ${actionLabel}`, "info");
-            loadModeration();
-          } catch (e) {
-            toast(`Error: ${e.message}`, "error");
-          }
-        });
-      }
     }
   };
 
   renderUsersList();
   searchInput.addEventListener("input", renderUsersList);
   filterSelect.addEventListener("change", renderUsersList);
+
+  // Event delegation for mod actions (prevents listener accumulation)
+  usersList.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-mod-action]");
+    if (!btn) return;
+
+    try {
+      const action = btn.dataset.modAction;
+      const userId = Number(btn.dataset.userId);
+
+      let actionData = null;
+      if (action === "suspend") {
+        actionData = await suspensionDialog();
+        if (!actionData) return;
+      } else if (action === "ban" || action === "restore") {
+        const title = action === "ban" ? "Ban this account?" : "Restore this account?";
+        actionData = await actionDialog(title);
+        if (!actionData) return;
+      }
+
+      const payload = { action, ...(actionData && actionData.durationDays ? { duration_days: actionData.durationDays } : {}), ...(actionData && actionData.reason ? { reason: actionData.reason } : {}) };
+      await api.post(`/api/mod/users/${userId}/status`, payload);
+      const actionLabel = { suspend: "suspended", ban: "banned", restore: "restored" }[action];
+      toast(`Account ${actionLabel}`, "info");
+      loadModeration();
+    } catch (e) {
+      toast(`Error: ${e.message}`, "error");
+    }
+  });
 
   const appeals = await api.get("/api/mod/appeals?status=pending&limit=50");
   const appealsList = $("mod-appeals-list");

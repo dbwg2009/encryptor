@@ -40,6 +40,10 @@ CSRF_HEADER = "X-CSRF-Token"
 PBKDF2_ITERATIONS = 200_000
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
+# List of email addresses that should be registered as moderators.
+# Set via CIPHER_MODERATOR_EMAILS environment variable (comma-separated emails).
+# Example: export CIPHER_MODERATOR_EMAILS="mod1@example.com,mod2@example.com"
+# If not set, all registered users will be regular users (role='user')
 MODERATOR_EMAILS = {
     email.strip().lower()
     for email in os.environ.get("CIPHER_MODERATOR_EMAILS", "").split(",")
@@ -505,8 +509,9 @@ class ReportIn(BaseModel):
 
 
 class ModUserActionIn(BaseModel):
-    action: str = Field(..., pattern="^(suspend|ban|restore)$")
+    action: str = Field(..., pattern="^(suspend|ban|restore|approve|reject)$")
     duration_days: Optional[int] = Field(default=7, ge=1, le=365)  # For suspend action only
+    reason: Optional[str] = Field(default=None, max_length=500)
 
 
 class ModChangeRoleIn(BaseModel):
@@ -1501,7 +1506,7 @@ def list_blocked(user = Depends(auth_dep)):
 # ── Reports ───────────────────────────────────────────────────────────────────
 
 @app.post("/api/report", status_code=201)
-def report(body: ReportIn, user = Depends(auth_dep)):
+def report(body: ReportIn, user = Depends(require_active_user)):
     if not body.reportedUserId and not body.messageId and not body.groupMessageId:
         raise HTTPException(400, "Must report a user or message")
     now = int(time.time())
@@ -1538,8 +1543,9 @@ def mod_stats(user = Depends(require_moderator)):
 
 
 @app.get("/api/mod/reports")
-def mod_reports(limit: int = 100, user = Depends(require_moderator)):
+def mod_reports(limit: int = 100, offset: int = 0, user = Depends(require_moderator)):
     limit = max(1, min(limit, 200))
+    offset = max(0, offset)
     with db() as conn:
         rows = conn.execute(
             """SELECT r.id, r.reason, r.details, r.created_at,
@@ -1549,8 +1555,8 @@ def mod_reports(limit: int = 100, user = Depends(require_moderator)):
                    FROM reports r
                    LEFT JOIN users rep ON rep.id = r.reporter_id
                    LEFT JOIN users tgt ON tgt.id = r.reported_user_id
-                  ORDER BY r.created_at DESC LIMIT ?""",
-            (limit,)
+                  ORDER BY r.created_at DESC LIMIT ? OFFSET ?""",
+            (limit, offset)
         ).fetchall()
     return [{
         "id": r["id"],
@@ -1567,12 +1573,13 @@ def mod_reports(limit: int = 100, user = Depends(require_moderator)):
 
 
 @app.get("/api/mod/users")
-def mod_users(limit: int = 200, user = Depends(require_moderator)):
+def mod_users(limit: int = 200, offset: int = 0, user = Depends(require_moderator)):
     limit = max(1, min(limit, 500))
+    offset = max(0, offset)
     with db() as conn:
         rows = conn.execute(
-            "SELECT id, email, role, status, created_at, last_login_at FROM users ORDER BY created_at DESC LIMIT ?",
-            (limit,)
+            "SELECT id, email, role, status, created_at, last_login_at FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset)
         ).fetchall()
     return [{
         "id": r["id"],
