@@ -119,10 +119,18 @@
       <button class="tab" data-route="messages" type="button">Messages <span class="count" id="msg-unread" style="display:none">0</span></button>
       <button class="tab" data-route="history" type="button">History</button>
       <button class="tab" data-route="settings" type="button">Settings</button>
-      <button class="tab hidden" data-route="moderation" type="button">Moderation</button>
+    </nav>
+
+    <nav class="tabs main-tabs hidden" id="mod-tabs">
+      <button class="tab active" data-mod-route="dashboard" type="button">Dashboard</button>
+      <button class="tab" data-mod-route="reports" type="button">Reports</button>
+      <button class="tab" data-mod-route="users" type="button">Users</button>
+      <button class="tab" data-mod-route="appeals" type="button">Appeals <span class="count" id="mod-appeals-count" style="display:none">0</span></button>
+      <button class="tab" data-mod-route="audit" type="button">Audit</button>
     </nav>
 
     <div class="topbar-end">
+      <button class="icon-btn hidden" id="mod-mode-btn" title="Switch to moderator mode">mod</button>
       <button class="icon-btn" id="lock-btn" title="Lock vault (keeps you signed in)">lock</button>
       <button class="icon-btn" id="logout-btn" title="Sign out">logout</button>
     </div>
@@ -345,63 +353,73 @@
 
   <!-- ─── MODERATION TAB ─── -->
   <main id="tab-moderation" class="tab-pane hidden">
-    <section class="card">
-      <div class="card-label">
-        <span>Moderator dashboard</span>
-        <span class="hint">Visible only to moderator accounts</span>
-      </div>
-      <div class="grid-tiles" style="gap:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-top:12px;">
-        <div class="metric-card"><div class="metric-label">Users</div><div class="metric-value" id="mod-total-users">0</div></div>
-        <div class="metric-card"><div class="metric-label">Active</div><div class="metric-value" id="mod-active-users">0</div></div>
-        <div class="metric-card"><div class="metric-label">Suspended</div><div class="metric-value" id="mod-suspended-users">0</div></div>
-        <div class="metric-card"><div class="metric-label">Banned</div><div class="metric-value" id="mod-banned-users">0</div></div>
-        <div class="metric-card"><div class="metric-label">Messages</div><div class="metric-value" id="mod-total-messages">0</div></div>
-        <div class="metric-card" style="position:relative;">
-          <div class="metric-label">Reports</div>
-          <div class="metric-value" id="mod-total-reports">0</div>
-          <div id="mod-unreviewed-badge" style="display:none;position:absolute;top:8px;right:8px;background:#ff5454;color:white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;"></div>
+    <section id="mod-pane-dashboard" class="mod-pane">
+      <section class="card">
+        <div class="card-label">
+          <span>Moderator dashboard</span>
+          <span class="hint">Visible only to moderator accounts</span>
         </div>
-        <div class="metric-card" style="position:relative;">
-          <div class="metric-label">Appeals</div>
-          <div class="metric-value" id="mod-pending-appeals">0</div>
-          <div id="mod-appeals-badge" style="display:none;position:absolute;top:8px;right:8px;background:#ff5454;color:white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;"></div>
+        <div class="grid-tiles" style="gap:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-top:12px;">
+          <div class="metric-card"><div class="metric-label">Users</div><div class="metric-value" id="mod-total-users">0</div></div>
+          <div class="metric-card"><div class="metric-label">Active</div><div class="metric-value" id="mod-active-users">0</div></div>
+          <div class="metric-card"><div class="metric-label">Suspended</div><div class="metric-value" id="mod-suspended-users">0</div></div>
+          <div class="metric-card"><div class="metric-label">Banned</div><div class="metric-value" id="mod-banned-users">0</div></div>
+          <div class="metric-card"><div class="metric-label">Messages</div><div class="metric-value" id="mod-total-messages">0</div></div>
+          <div class="metric-card" style="position:relative;">
+            <div class="metric-label">Reports</div>
+            <div class="metric-value" id="mod-total-reports">0</div>
+            <div id="mod-unreviewed-badge" style="display:none;position:absolute;top:8px;right:8px;background:#ff5454;color:white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;"></div>
+          </div>
+          <div class="metric-card" style="position:relative;">
+            <div class="metric-label">Appeals</div>
+            <div class="metric-value" id="mod-pending-appeals">0</div>
+            <div id="mod-appeals-badge" style="display:none;position:absolute;top:8px;right:8px;background:#ff5454;color:white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;"></div>
+          </div>
         </div>
-      </div>
+      </section>
     </section>
 
-    <section class="card">
-      <h3 class="section-h">Recent reports</h3>
-      <div class="muted small" style="margin-bottom:12px;">Reports are shown in plain text so moderators can review them quickly.</div>
-      <input type="text" id="mod-reports-search" placeholder="Search reports by reason or details..." style="width:100%;margin-bottom:12px;">
-      <div id="mod-reports-list" class="table"></div>
+    <section id="mod-pane-reports" class="mod-pane hidden">
+      <section class="card">
+        <h3 class="section-h">Recent reports</h3>
+        <div class="muted small" style="margin-bottom:12px;">Reports are shown in plain text so moderators can review them quickly.</div>
+        <input type="text" id="mod-reports-search" placeholder="Search reports by reason or details..." style="width:100%;margin-bottom:12px;">
+        <div id="mod-reports-list" class="table"></div>
+      </section>
     </section>
 
-    <section class="card">
-      <h3 class="section-h">User accounts</h3>
-      <p class="muted small">Suspend or ban an account to stop abusive activity.</p>
-      <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
-        <input type="text" id="mod-user-search" placeholder="Search by email..." style="flex:1;min-width:200px;">
-        <select id="mod-user-filter" style="min-width:150px;">
-          <option value="">All users</option>
-          <option value="active">Active only</option>
-          <option value="suspended">Suspended only</option>
-          <option value="banned">Banned only</option>
-          <option value="moderator">Moderators only</option>
-        </select>
-      </div>
-      <div id="mod-users-list" class="table"></div>
+    <section id="mod-pane-users" class="mod-pane hidden">
+      <section class="card">
+        <h3 class="section-h">User accounts</h3>
+        <p class="muted small">Suspend or ban an account to stop abusive activity.</p>
+        <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+          <input type="text" id="mod-user-search" placeholder="Search by email..." style="flex:1;min-width:200px;">
+          <select id="mod-user-filter" style="min-width:150px;">
+            <option value="">All users</option>
+            <option value="active">Active only</option>
+            <option value="suspended">Suspended only</option>
+            <option value="banned">Banned only</option>
+            <option value="moderator">Moderators only</option>
+          </select>
+        </div>
+        <div id="mod-users-list" class="table"></div>
+      </section>
     </section>
 
-    <section class="card">
-      <h3 class="section-h">Pending appeals</h3>
-      <p class="muted small">Users can appeal their suspension or ban with a written reason.</p>
-      <div id="mod-appeals-list" class="table"></div>
+    <section id="mod-pane-appeals" class="mod-pane hidden">
+      <section class="card">
+        <h3 class="section-h">Pending appeals</h3>
+        <p class="muted small">Users can appeal their suspension or ban with a written reason.</p>
+        <div id="mod-appeals-list" class="table"></div>
+      </section>
     </section>
 
-    <section class="card">
-      <h3 class="section-h">Audit log</h3>
-      <p class="muted small">All moderator actions are logged for transparency and accountability.</p>
-      <div id="mod-audit-log" class="table"></div>
+    <section id="mod-pane-audit" class="mod-pane hidden">
+      <section class="card">
+        <h3 class="section-h">Audit log</h3>
+        <p class="muted small">All moderator actions are logged for transparency and accountability.</p>
+        <div id="mod-audit-log" class="table"></div>
+      </section>
     </section>
   </main>
 </section>
