@@ -680,18 +680,6 @@
 </div>
 
 <script type="module" src="/static/js/app.js"></script>
-
-<!-- Service Worker Registration -->
-<script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/static/js/sw.js', { scope: '/' })
-    .then((registration) => {
-      console.log('Service Worker registered:', registration);
-    })
-    .catch((error) => {
-      console.log('Service Worker registration failed:', error);
-    });
-}
-</script>
+<script src="/static/js/sw-register.js"></script>
 </body>
 </html>
