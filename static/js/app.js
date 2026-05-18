@@ -881,10 +881,10 @@ async function loadModeration() {
 
     const reports = await api.get("/api/mod/reports?limit=100");
   const reportsList = $("mod-reports-list");
-  const searchInput = $("mod-reports-search");
+  const reportsSearchInput = $("mod-reports-search");
 
   const renderReports = () => {
-    const searchTerm = searchInput.value.toLowerCase();
+    const searchTerm = reportsSearchInput.value.toLowerCase();
     let filtered = reports.filter(r => {
       const searchText = [
         r.reason,
@@ -950,7 +950,7 @@ async function loadModeration() {
   };
 
   renderReports();
-  searchInput.addEventListener("input", renderReports);
+  reportsSearchInput.addEventListener("input", renderReports);
 
   const users = await api.get("/api/mod/users?limit=200");
   const searchInput = $("mod-user-search");

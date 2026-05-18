@@ -1746,6 +1746,11 @@ def create_appeal(body: ModUserActionIn, user = Depends(auth_dep)):
 @app.get("/api/mod/appeals")
 def get_appeals(user = Depends(require_moderator), status: str = "pending", limit: int = 50, offset: int = 0):
     """Get appeals for moderator review."""
+    # Validate status parameter to prevent SQL injection
+    valid_statuses = {"pending", "approved", "rejected"}
+    if status and status not in valid_statuses:
+        raise HTTPException(400, "Invalid status value")
+
     if limit > 500:
         limit = 500
     if limit < 1:
@@ -1755,24 +1760,31 @@ def get_appeals(user = Depends(require_moderator), status: str = "pending", limi
 
     with db() as conn:
         # Get total count
-        query = "SELECT COUNT(*) as cnt FROM appeals"
-        params = []
         if status:
-            query += " WHERE status = ?"
-            params.append(status)
-        total = conn.execute(query, params).fetchone()["cnt"]
+            total = conn.execute("SELECT COUNT(*) as cnt FROM appeals WHERE status = ?", (status,)).fetchone()["cnt"]
+        else:
+            total = conn.execute("SELECT COUNT(*) as cnt FROM appeals").fetchone()["cnt"]
 
         # Get appeals
-        query = """SELECT a.id, a.user_id, a.status, a.reason, a.response, a.created_at, a.reviewed_at,
+        if status:
+            rows = conn.execute(
+                """SELECT a.id, a.user_id, a.status, a.reason, a.response, a.created_at, a.reviewed_at,
                           a.reviewed_by, u.email
                    FROM appeals a
-                   LEFT JOIN users u ON a.user_id = u.id"""
-        if status:
-            query += " WHERE a.status = ?"
-        query += " ORDER BY a.created_at DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-
-        rows = conn.execute(query, params).fetchall()
+                   LEFT JOIN users u ON a.user_id = u.id
+                   WHERE a.status = ?
+                   ORDER BY a.created_at DESC LIMIT ? OFFSET ?""",
+                (status, limit, offset)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT a.id, a.user_id, a.status, a.reason, a.response, a.created_at, a.reviewed_at,
+                          a.reviewed_by, u.email
+                   FROM appeals a
+                   LEFT JOIN users u ON a.user_id = u.id
+                   ORDER BY a.created_at DESC LIMIT ? OFFSET ?""",
+                (limit, offset)
+            ).fetchall()
 
     entries = [
         {
