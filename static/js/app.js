@@ -847,10 +847,11 @@ async function loadModeration() {
     } else {
       appealsBadge.style.display = "none";
     }
-  const reportsList = $("mod-reports-list");
-  const reportsSearchInput = $("mod-reports-search");
 
-  const renderReports = () => {
+    const reportsList = $("mod-reports-list");
+    const reportsSearchInput = $("mod-reports-search");
+
+    const renderReports = () => {
     const searchTerm = reportsSearchInput.value.toLowerCase();
     let filtered = reports.filter(r => {
       const searchText = [
@@ -900,15 +901,15 @@ async function loadModeration() {
         reportsList.appendChild(reportRow);
       });
     }
-  };
+    };
 
-  renderReports();
-  reportsSearchInput.addEventListener("input", renderReports);
+    renderReports();
+    reportsSearchInput.addEventListener("input", renderReports);
 
-  const searchInput = $("mod-user-search");
-  const filterSelect = $("mod-user-filter");
+    const searchInput = $("mod-user-search");
+    const filterSelect = $("mod-user-filter");
 
-  const renderUsersList = () => {
+    const renderUsersList = () => {
     const searchTerm = searchInput.value.toLowerCase();
     const filterStatus = filterSelect.value;
 
