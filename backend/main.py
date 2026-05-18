@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS users (
   auth_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
   status TEXT NOT NULL DEFAULT 'active',
+  suspended_until INTEGER,
   created_at INTEGER NOT NULL,
   last_login_at INTEGER
 );
@@ -242,6 +243,7 @@ def _migrate(conn):
     migrations = [
         ("users",          "role", "TEXT NOT NULL DEFAULT 'user'"),
         ("users",          "status", "TEXT NOT NULL DEFAULT 'active'"),
+        ("users",          "suspended_until", "INTEGER"),
         ("messages",       "reply_to_id", "INTEGER REFERENCES messages(id) ON DELETE SET NULL"),
         ("group_messages", "reply_to_id", "INTEGER REFERENCES group_messages(id) ON DELETE SET NULL"),
         ("push_subscriptions", None, None),  # table-level check only
@@ -333,10 +335,12 @@ def make_session(user_id: int, request: Request, response: Response):
     set_cookie(response, CSRF_COOKIE, csrf, request, http_only=False)
 
 
+def is_super_moderator(user: sqlite3.Row) -> bool:
+    return user["role"] == "super_moderator"
+
+
 def is_moderator_row(user: sqlite3.Row) -> bool:
-    if user["role"] == "moderator":
-        return True
-    return user["email"].lower() in MODERATOR_EMAILS
+    return user["role"] in ("moderator", "super_moderator")
 
 
 def current_user(request: Request) -> Optional[sqlite3.Row]:
@@ -479,6 +483,11 @@ class ReportIn(BaseModel):
 
 class ModUserActionIn(BaseModel):
     action: str = Field(..., pattern="^(suspend|ban|restore)$")
+    duration_days: Optional[int] = Field(default=7, ge=1, le=365)  # For suspend action only
+
+
+class ModChangeRoleIn(BaseModel):
+    new_role: str = Field(..., pattern="^(user|moderator|super_moderator)$")
 
 
 class InviteToGroupIn(BaseModel):
@@ -572,12 +581,19 @@ def register(body: RegisterIn, request: Request, response: Response):
 def login(body: LoginIn, request: Request, response: Response):
     rate_limit(f"login:{client_ip(request)}", 10, 60)
     email = body.email.lower().strip()
+    now = int(time.time())
     with db() as conn:
-        row = conn.execute("SELECT id, auth_hash, status FROM users WHERE email = ?", (email,)).fetchone()
+        row = conn.execute("SELECT id, auth_hash, status, suspended_until FROM users WHERE email = ?", (email,)).fetchone()
     if not row:
         raise HTTPException(401, "Invalid credentials")
     if row["status"] == "banned":
         raise HTTPException(403, "Account banned")
+    # Auto-restore if suspension expired
+    if row["status"] == "suspended" and row["suspended_until"] and row["suspended_until"] <= now:
+        with db() as conn:
+            conn.execute("UPDATE users SET status = 'active', suspended_until = NULL WHERE id = ?", (row["id"],))
+    elif row["status"] == "suspended":
+        raise HTTPException(403, "Account suspended")
     try:
         hasher.verify(row["auth_hash"], body.authHash.lower())
     except (VerifyMismatchError, InvalidHash):
@@ -585,7 +601,7 @@ def login(body: LoginIn, request: Request, response: Response):
     make_session(row["id"], request, response)
     _log_login(row["id"], request)
     with db() as conn:
-        conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (int(time.time()), row["id"]))
+        conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (now, row["id"]))
     return {"id": row["id"], "email": email}
 
 
@@ -1549,23 +1565,56 @@ def mod_users(limit: int = 200, user = Depends(require_moderator)):
 def mod_user_status(user_id: int, body: ModUserActionIn, user = Depends(require_moderator)):
     if user_id == user["id"]:
         raise HTTPException(400, "Cannot modify your own account")
-    if body.action == "suspend":
-        status = "suspended"
-    elif body.action == "ban":
-        status = "banned"
-    else:
-        status = "active"
+
+    now = int(time.time())
     with db() as conn:
-        target = conn.execute("SELECT id, email FROM users WHERE id = ?", (user_id,)).fetchone()
+        target = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
         if not target:
             raise HTTPException(404, "User not found")
-        # Prevent moderators from modifying other moderators
-        if status != "active" and target["email"].lower() in MODERATOR_EMAILS:
-            raise HTTPException(403, "Cannot modify moderator accounts")
-        conn.execute("UPDATE users SET status = ? WHERE id = ?", (status, user_id))
-        if status in ("banned", "suspended"):
+
+        # Determine new status and suspended_until
+        if body.action == "suspend":
+            new_status = "suspended"
+            suspended_until = now + (body.duration_days * 86400) if body.duration_days else now + (7 * 86400)
+        elif body.action == "ban":
+            new_status = "banned"
+            suspended_until = None
+        else:  # restore
+            new_status = "active"
+            suspended_until = None
+
+        # Permission checks: only super_moderators can modify moderators
+        target_is_mod = target["role"] in ("moderator", "super_moderator")
+        if target_is_mod and not is_super_moderator(user):
+            raise HTTPException(403, "Only super moderators can modify moderators")
+
+        # Update user status
+        conn.execute(
+            "UPDATE users SET status = ?, suspended_until = ? WHERE id = ?",
+            (new_status, suspended_until, user_id)
+        )
+
+        # Revoke sessions if suspending or banning
+        if new_status in ("banned", "suspended"):
             conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+
     return {"ok": True}
+
+
+@app.post("/api/mod/users/{user_id}/role")
+def mod_change_role(user_id: int, body: ModChangeRoleIn, user = Depends(require_moderator)):
+    if user_id == user["id"]:
+        raise HTTPException(400, "Cannot change your own role")
+    if not is_super_moderator(user):
+        raise HTTPException(403, "Only super moderators can change roles")
+
+    with db() as conn:
+        target = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not target:
+            raise HTTPException(404, "User not found")
+        conn.execute("UPDATE users SET role = ? WHERE id = ?", (body.new_role, user_id))
+
+    return {"ok": True, "newRole": body.new_role}
 
 
 # ── Session management ────────────────────────────────────────────────────────────
