@@ -64,17 +64,25 @@ function suspensionDialog() {
     const m = $("suspension-modal");
     const form = $("suspension-form");
     const duration = $("suspension-duration");
+    const template = $("suspension-template");
     const reason = $("suspension-reason");
     const ok = $("suspension-ok");
     const cancel = $("suspension-cancel");
 
     form.reset();
 
+    const onTemplateChange = () => {
+      if (template.value) {
+        reason.value = template.value;
+      }
+    };
+
     const close = (v) => {
       m.classList.add("hidden");
       ok.removeEventListener("click", onOk);
       cancel.removeEventListener("click", onCancel);
       form.removeEventListener("submit", onSubmit);
+      template.removeEventListener("change", onTemplateChange);
       resolve(v);
     };
     const onOk = () => {
@@ -90,8 +98,51 @@ function suspensionDialog() {
     ok.addEventListener("click", onOk);
     cancel.addEventListener("click", onCancel);
     form.addEventListener("submit", onSubmit);
+    template.addEventListener("change", onTemplateChange);
     m.classList.remove("hidden");
     duration.focus();
+  });
+}
+
+function actionDialog(title) {
+  return new Promise((resolve) => {
+    const m = $("action-modal");
+    const form = $("action-form");
+    const template = $("action-template");
+    const reason = $("action-reason");
+    const ok = $("action-ok");
+    const cancel = $("action-cancel");
+    const titleEl = $("action-modal-title");
+
+    titleEl.textContent = title;
+    form.reset();
+
+    const onTemplateChange = () => {
+      if (template.value) {
+        reason.value = template.value;
+      }
+    };
+
+    const close = (v) => {
+      m.classList.add("hidden");
+      ok.removeEventListener("click", onOk);
+      cancel.removeEventListener("click", onCancel);
+      form.removeEventListener("submit", onSubmit);
+      template.removeEventListener("change", onTemplateChange);
+      resolve(v);
+    };
+    const onOk = () => {
+      close({ reason: reason.value || null });
+    };
+    const onCancel = () => close(null);
+    const onSubmit = (e) => { e.preventDefault(); onOk(); };
+
+    ok.addEventListener("click", onOk);
+    cancel.addEventListener("click", onCancel);
+    form.addEventListener("submit", onSubmit);
+    template.addEventListener("change", onTemplateChange);
+    m.classList.remove("hidden");
+    template.focus();
   });
 }
 
@@ -944,17 +995,17 @@ async function loadModeration() {
             const action = btn.dataset.modAction;
             const userId = Number(btn.dataset.userId);
 
-            let suspensionData = null;
+            let actionData = null;
             if (action === "suspend") {
-              suspensionData = await suspensionDialog();
-              if (!suspensionData) return;
-            } else {
-              const confirmText = action === "ban" ? "Ban this account?" : "Restore this account?";
-              const ok = await confirmDialog({ title: confirmText, body: "This change affects sign-in and messaging rights.", okText: action === "ban" ? "Ban" : "Restore", danger: action !== "restore" });
-              if (!ok) return;
+              actionData = await suspensionDialog();
+              if (!actionData) return;
+            } else if (action === "ban" || action === "restore") {
+              const title = action === "ban" ? "Ban this account?" : "Restore this account?";
+              actionData = await actionDialog(title);
+              if (!actionData) return;
             }
 
-            const payload = { action, ...(suspensionData ? { duration_days: suspensionData.durationDays, reason: suspensionData.reason } : {}) };
+            const payload = { action, ...(actionData && actionData.durationDays ? { duration_days: actionData.durationDays } : {}), ...(actionData && actionData.reason ? { reason: actionData.reason } : {}) };
             await api.post(`/api/mod/users/${userId}/status`, payload);
             const actionLabel = { suspend: "suspended", ban: "banned", restore: "restored" }[action];
             toast(`Account ${actionLabel}`, "info");

@@ -548,7 +548,18 @@
         </select>
       </label>
       <label class="field">
-        <span>Reason (optional)</span>
+        <span>Reason template</span>
+        <select id="suspension-template">
+          <option value="">Custom reason...</option>
+          <option value="Spam or repetitive content">Spam or repetitive content</option>
+          <option value="Harassment or bullying">Harassment or bullying</option>
+          <option value="Inappropriate content">Inappropriate content</option>
+          <option value="Violation of community guidelines">Violation of community guidelines</option>
+          <option value="Suspicious activity">Suspicious activity</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Reason</span>
         <textarea id="suspension-reason" placeholder="Why is this account being suspended?" maxlength="500"></textarea>
       </label>
     </form>
@@ -581,6 +592,33 @@
     <div class="modal-foot">
       <button class="btn ghost" id="appeal-cancel" type="button">Cancel</button>
       <button class="btn primary" id="appeal-submit" type="button">Submit decision</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="action-modal">
+  <div class="modal-card sm">
+    <header class="modal-head"><h3 id="action-modal-title">Confirm action</h3></header>
+    <form id="action-form" class="form">
+      <label class="field">
+        <span>Reason template</span>
+        <select id="action-template">
+          <option value="">Custom reason...</option>
+          <option value="Spam or repetitive content">Spam or repetitive content</option>
+          <option value="Harassment or bullying">Harassment or bullying</option>
+          <option value="Inappropriate content">Inappropriate content</option>
+          <option value="Violation of community guidelines">Violation of community guidelines</option>
+          <option value="Suspicious activity">Suspicious activity</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Reason (optional)</span>
+        <textarea id="action-reason" placeholder="Provide additional details..." maxlength="500"></textarea>
+      </label>
+    </form>
+    <div class="modal-foot">
+      <button class="btn ghost" id="action-cancel" type="button">Cancel</button>
+      <button class="btn danger" id="action-ok" type="button">Confirm</button>
     </div>
   </div>
 </div>
