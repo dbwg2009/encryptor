@@ -1225,6 +1225,7 @@ async function loadModeration() {
   errorEl4.textContent = e.message;
   auditList.replaceChildren(errorEl4);
 }
+}
 
 async function loadSessions() {
   const list = $("sessions-list");
