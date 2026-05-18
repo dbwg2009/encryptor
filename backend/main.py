@@ -554,6 +554,7 @@ async def security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
     response.headers["Permissions-Policy"] = "interest-cohort=(), browsing-topics=()"
+    response.headers["Service-Worker-Allowed"] = "/"
     if not request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-store"
     response.headers["Content-Security-Policy"] = (
