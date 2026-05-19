@@ -664,10 +664,14 @@
 <div class="modal hidden" id="report-modal">
   <div class="modal-card">
     <header class="modal-head">
-      <h3>Report</h3>
+      <h3>Report Message</h3>
       <button class="icon-btn" id="report-close" type="button">close</button>
     </header>
     <form id="report-form" class="form">
+      <div id="report-preview" class="card" style="margin-bottom:16px;padding:12px;background:rgba(255,255,255,0.05);border-radius:4px;display:none;">
+        <div class="muted small" style="margin-bottom:8px;">Message being reported:</div>
+        <div id="report-preview-text" style="word-break:break-word;"></div>
+      </div>
       <label class="field">
         <span>Reason</span>
         <select id="report-reason" class="select" required>
@@ -683,7 +687,9 @@
         <span>Details <span class="hint">optional</span></span>
         <textarea id="report-details" rows="3" maxlength="2000" placeholder="Additional context…"></textarea>
       </label>
-      <p class="muted small">This report will be passed along unencrypted to moderators.</p>
+      <div style="background:rgba(255,165,0,0.1);border-left:3px solid #ffa500;padding:12px;margin:16px 0;border-radius:2px;">
+        <p class="muted small" style="margin:0;">⚠️ <strong>Privacy Notice:</strong> This message will be decrypted and sent unencrypted to moderators for review. They will be able to see the full content to take appropriate action.</p>
+      </div>
       <p id="report-error" class="form-error hidden"></p>
       <div class="modal-foot">
         <button class="btn ghost" type="button" id="report-cancel">Cancel</button>

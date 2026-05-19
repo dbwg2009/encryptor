@@ -177,6 +177,7 @@ CREATE TABLE IF NOT EXISTS reports (
   group_message_id INTEGER REFERENCES group_messages(id) ON DELETE SET NULL,
   reason TEXT NOT NULL,
   details TEXT,
+  message_content TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at DESC);
@@ -273,6 +274,7 @@ def _migrate(conn):
         ("users",          "suspended_until", "INTEGER"),
         ("messages",       "reply_to_id", "INTEGER REFERENCES messages(id) ON DELETE SET NULL"),
         ("group_messages", "reply_to_id", "INTEGER REFERENCES group_messages(id) ON DELETE SET NULL"),
+        ("reports",        "message_content", "TEXT"),
         ("push_subscriptions", None, None),  # table-level check only
     ]
     existing_tables = {r[0] for r in conn.execute(
@@ -506,6 +508,7 @@ class ReportIn(BaseModel):
     groupMessageId: Optional[int] = None
     reason: str = Field(min_length=1, max_length=500)
     details: Optional[str] = Field(default=None, max_length=2000)
+    messageContent: Optional[str] = Field(default=None, max_length=10000)
 
 
 class ModUserActionIn(BaseModel):
@@ -1512,9 +1515,9 @@ def report(body: ReportIn, user = Depends(require_active_user)):
     now = int(time.time())
     with db() as conn:
         cur = conn.execute(
-            "INSERT INTO reports (reporter_id, reported_user_id, message_id, group_message_id, reason, details, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (user["id"], body.reportedUserId, body.messageId, body.groupMessageId, body.reason, body.details, now)
+            "INSERT INTO reports (reporter_id, reported_user_id, message_id, group_message_id, reason, details, message_content, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (user["id"], body.reportedUserId, body.messageId, body.groupMessageId, body.reason, body.details, body.messageContent, now)
         )
     return {"id": cur.lastrowid}
 
@@ -1549,7 +1552,7 @@ def mod_reports(limit: int = 100, offset: int = 0, user = Depends(require_modera
     with db() as conn:
         rows = conn.execute(
             """SELECT r.id, r.reason, r.details, r.created_at,
-                        r.message_id, r.group_message_id,
+                        r.message_id, r.group_message_id, r.message_content,
                         r.reporter_id, rep.email AS reporter_email,
                         r.reported_user_id, tgt.email AS reported_email
                    FROM reports r
@@ -1565,6 +1568,7 @@ def mod_reports(limit: int = 100, offset: int = 0, user = Depends(require_modera
         "createdAt": r["created_at"],
         "messageId": r["message_id"],
         "groupMessageId": r["group_message_id"],
+        "messageContent": r["message_content"],
         "reporterId": r["reporter_id"],
         "reporterEmail": r["reporter_email"],
         "reportedUserId": r["reported_user_id"],
