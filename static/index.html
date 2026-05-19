@@ -102,6 +102,79 @@
   </div>
 </section>
 
+<!-- ╔══════════════════ SUSPENSION VIEW ══════════════════╗ -->
+<section id="view-suspension" class="view view-center hidden">
+  <div class="auth-shell">
+    <div class="brand brand-lg">
+      <div class="logo">AC</div>
+      <h1 id="susp-title">Account Suspended</h1>
+    </div>
+
+    <div class="card auth-card">
+      <div style="padding:20px;text-align:center;">
+        <p id="susp-message" class="muted" style="margin-bottom:16px;"></p>
+        <div id="susp-time-remain" style="font-size:18px;margin:16px 0;"><b id="susp-time-text"></b></div>
+        <div class="actions" style="display:flex;gap:12px;justify-content:center;margin-top:24px;">
+          <button class="btn primary" id="susp-appeal-btn" type="button">Submit Appeal</button>
+          <button class="btn ghost" id="susp-logout-btn" type="button">Sign out</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ╔══════════════════ APPEAL PAGE ══════════════════╗ -->
+<section id="view-appeal" class="view view-center hidden">
+  <div class="auth-shell">
+    <div class="brand brand-lg">
+      <div class="logo">AC</div>
+      <h1 id="appeal-title">Appeal Your Restriction</h1>
+    </div>
+
+    <div class="card auth-card">
+      <div id="appeal-status-panel" style="display:none;padding:16px;margin-bottom:16px;background:rgba(100,200,100,0.1);border-left:3px solid #64c864;border-radius:4px;">
+        <p id="appeal-status-text" style="margin:0;"></p>
+      </div>
+
+      <form id="appeal-form" class="form">
+        <label class="field">
+          <span>Email</span>
+          <input id="appeal-email" type="email" autocomplete="username" required spellcheck="false" placeholder="your@email.com">
+        </label>
+
+        <label class="field">
+          <span>Appeal Type</span>
+          <select id="appeal-type" required>
+            <option value="">Select reason for appeal...</option>
+            <option value="mistaken">Mistaken ban/suspension</option>
+            <option value="violated_by_mistake">I violated rules by mistake</option>
+            <option value="circumstances_changed">My circumstances have changed</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Appeal Reason (minimum 50 characters)</span>
+          <textarea id="appeal-reason" rows="5" required minlength="50" maxlength="2000" placeholder="Explain why you believe your restriction should be lifted..."></textarea>
+          <small id="appeal-char-count" class="muted" style="display:block;margin-top:4px;">0 / 2000</small>
+        </label>
+
+        <p id="appeal-error" class="form-error hidden"></p>
+        <div class="modal-foot" style="margin-top:20px;">
+          <button class="btn ghost" type="button" id="appeal-cancel">Back</button>
+          <button class="btn primary" type="submit">Submit Appeal</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="appeal-success-panel" style="display:none;text-align:center;padding:20px;">
+      <h2 style="color:#64c864;margin-bottom:16px;">Appeal Submitted</h2>
+      <p class="muted" style="margin-bottom:12px;">Your appeal has been submitted to the moderators.</p>
+      <p id="appeal-success-id" class="muted" style="font-size:12px;margin-bottom:20px;"></p>
+      <button class="btn primary" id="appeal-back-btn" type="button">Return to Sign In</button>
+    </div>
+  </div>
+</section>
+
 <!-- ╔══════════════════ APP VIEW ══════════════════╗ -->
 <section id="view-app" class="view hidden">
   <header class="topbar">
@@ -121,7 +194,16 @@
       <button class="tab" data-route="settings" type="button">Settings</button>
     </nav>
 
+    <nav class="tabs main-tabs hidden" id="mod-tabs">
+      <button class="tab active" data-mod-route="dashboard" type="button">Dashboard</button>
+      <button class="tab" data-mod-route="reports" type="button">Reports</button>
+      <button class="tab" data-mod-route="users" type="button">Users</button>
+      <button class="tab" data-mod-route="appeals" type="button">Appeals <span class="count" id="mod-appeals-count" style="display:none">0</span></button>
+      <button class="tab" data-mod-route="audit" type="button">Audit</button>
+    </nav>
+
     <div class="topbar-end">
+      <button class="icon-btn hidden" id="mod-mode-btn" title="Switch to moderator mode">mod</button>
       <button class="icon-btn" id="lock-btn" title="Lock vault (keeps you signed in)">lock</button>
       <button class="icon-btn" id="logout-btn" title="Sign out">logout</button>
     </div>
@@ -341,6 +423,78 @@
       </form>
     </section>
   </main>
+
+  <!-- ─── MODERATION TAB ─── -->
+  <main id="tab-moderation" class="tab-pane hidden">
+    <section id="mod-pane-dashboard" class="mod-pane">
+      <section class="card">
+        <div class="card-label">
+          <span>Moderator dashboard</span>
+          <span class="hint">Visible only to moderator accounts</span>
+        </div>
+        <div class="grid-tiles" style="gap:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-top:12px;">
+          <div class="metric-card"><div class="metric-label">Users</div><div class="metric-value" id="mod-total-users">0</div></div>
+          <div class="metric-card"><div class="metric-label">Active</div><div class="metric-value" id="mod-active-users">0</div></div>
+          <div class="metric-card"><div class="metric-label">Suspended</div><div class="metric-value" id="mod-suspended-users">0</div></div>
+          <div class="metric-card"><div class="metric-label">Banned</div><div class="metric-value" id="mod-banned-users">0</div></div>
+          <div class="metric-card"><div class="metric-label">Messages</div><div class="metric-value" id="mod-total-messages">0</div></div>
+          <div class="metric-card" style="position:relative;">
+            <div class="metric-label">Reports</div>
+            <div class="metric-value" id="mod-total-reports">0</div>
+            <div id="mod-unreviewed-badge" style="display:none;position:absolute;top:8px;right:8px;background:#ff5454;color:white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;"></div>
+          </div>
+          <div class="metric-card" style="position:relative;">
+            <div class="metric-label">Appeals</div>
+            <div class="metric-value" id="mod-pending-appeals">0</div>
+            <div id="mod-appeals-badge" style="display:none;position:absolute;top:8px;right:8px;background:#ff5454;color:white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;"></div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section id="mod-pane-reports" class="mod-pane hidden">
+      <section class="card">
+        <h3 class="section-h">Recent reports</h3>
+        <div class="muted small" style="margin-bottom:12px;">Reports are shown in plain text so moderators can review them quickly.</div>
+        <input type="text" id="mod-reports-search" placeholder="Search reports by reason or details..." style="width:100%;margin-bottom:12px;">
+        <div id="mod-reports-list" class="table"></div>
+      </section>
+    </section>
+
+    <section id="mod-pane-users" class="mod-pane hidden">
+      <section class="card">
+        <h3 class="section-h">User accounts</h3>
+        <p class="muted small">Suspend or ban an account to stop abusive activity.</p>
+        <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+          <input type="text" id="mod-user-search" placeholder="Search by email..." style="flex:1;min-width:200px;">
+          <select id="mod-user-filter" style="min-width:150px;">
+            <option value="">All users</option>
+            <option value="active">Active only</option>
+            <option value="suspended">Suspended only</option>
+            <option value="banned">Banned only</option>
+            <option value="moderator">Moderators only</option>
+          </select>
+        </div>
+        <div id="mod-users-list" class="table"></div>
+      </section>
+    </section>
+
+    <section id="mod-pane-appeals" class="mod-pane hidden">
+      <section class="card">
+        <h3 class="section-h">Pending appeals</h3>
+        <p class="muted small">Users can appeal their suspension or ban with a written reason.</p>
+        <div id="mod-appeals-list" class="table"></div>
+      </section>
+    </section>
+
+    <section id="mod-pane-audit" class="mod-pane hidden">
+      <section class="card">
+        <h3 class="section-h">Audit log</h3>
+        <p class="muted small">All moderator actions are logged for transparency and accountability.</p>
+        <div id="mod-audit-log" class="table"></div>
+      </section>
+    </section>
+  </main>
 </section>
 
 <!-- ╔══════════════════ MODALS ══════════════════╗ -->
@@ -470,13 +624,145 @@
   </div>
 </div>
 
+<div class="modal hidden" id="suspension-modal">
+  <div class="modal-card sm">
+    <header class="modal-head"><h3>Suspend account</h3></header>
+    <form id="suspension-form" class="form">
+      <label class="field">
+        <span>Duration</span>
+        <select id="suspension-duration" required>
+          <option value="">Select duration...</option>
+          <option value="1">1 day</option>
+          <option value="7">7 days</option>
+          <option value="30">30 days</option>
+          <option value="60">60 days</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Reason template</span>
+        <select id="suspension-template">
+          <option value="">Custom reason...</option>
+          <option value="Spam or repetitive content">Spam or repetitive content</option>
+          <option value="Harassment or bullying">Harassment or bullying</option>
+          <option value="Inappropriate content">Inappropriate content</option>
+          <option value="Violation of community guidelines">Violation of community guidelines</option>
+          <option value="Suspicious activity">Suspicious activity</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Reason</span>
+        <textarea id="suspension-reason" placeholder="Why is this account being suspended?" maxlength="500"></textarea>
+      </label>
+    </form>
+    <div class="modal-foot">
+      <button class="btn ghost" id="suspension-cancel" type="button">Cancel</button>
+      <button class="btn danger" id="suspension-ok" type="button">Suspend</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="appeal-review-modal">
+  <div class="modal-card">
+    <header class="modal-head"><h3>Review appeal</h3></header>
+    <div class="modal-body">
+      <p><b>Appeal reason:</b></p>
+      <p id="appeal-reason-text" style="margin-bottom:12px;"></p>
+      <label class="field">
+        <span>Decision</span>
+        <select id="appeal-decision" required>
+          <option value="">Select decision...</option>
+          <option value="approve">Approve - Restore account</option>
+          <option value="reject">Reject - Keep restriction</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Response to user (optional)</span>
+        <textarea id="appeal-response" placeholder="Explain your decision..." maxlength="500"></textarea>
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="appeal-cancel" type="button">Cancel</button>
+      <button class="btn primary" id="appeal-submit" type="button">Submit decision</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="action-modal">
+  <div class="modal-card sm">
+    <header class="modal-head"><h3 id="action-modal-title">Confirm action</h3></header>
+    <form id="action-form" class="form">
+      <label class="field">
+        <span>Reason template</span>
+        <select id="action-template">
+          <option value="">Custom reason...</option>
+          <option value="Spam or repetitive content">Spam or repetitive content</option>
+          <option value="Harassment or bullying">Harassment or bullying</option>
+          <option value="Inappropriate content">Inappropriate content</option>
+          <option value="Violation of community guidelines">Violation of community guidelines</option>
+          <option value="Suspicious activity">Suspicious activity</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Reason (optional)</span>
+        <textarea id="action-reason" placeholder="Provide additional details..." maxlength="500"></textarea>
+      </label>
+    </form>
+    <div class="modal-foot">
+      <button class="btn ghost" id="action-cancel" type="button">Cancel</button>
+      <button class="btn danger" id="action-ok" type="button">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="restore-modal">
+  <div class="modal-card sm">
+    <header class="modal-head"><h3>Restore this account</h3></header>
+    <form id="restore-form" class="form">
+      <label class="field">
+        <span>Reason for restoration</span>
+        <select id="restore-reason">
+          <option value="">Select a reason...</option>
+          <option value="Appeal approved">Appeal approved</option>
+          <option value="Manual review - no violation found">Manual review - no violation found</option>
+          <option value="Mistaken suspension">Mistaken suspension</option>
+        </select>
+      </label>
+    </form>
+    <div class="modal-foot">
+      <button class="btn ghost" id="restore-cancel" type="button">Cancel</button>
+      <button class="btn primary" id="restore-ok" type="button">Restore</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="submit-appeal-modal">
+  <div class="modal-card sm">
+    <header class="modal-head"><h3>Appeal your restriction</h3></header>
+    <form id="submit-appeal-form" class="form">
+      <p class="muted small" style="margin-bottom:12px;">Explain why you believe your restriction should be lifted.</p>
+      <label class="field">
+        <span>Appeal reason</span>
+        <textarea id="appeal-reason-input" required placeholder="Provide details about your appeal..." maxlength="1000"></textarea>
+      </label>
+    </form>
+    <div class="modal-foot">
+      <button class="btn ghost" id="appeal-submit-cancel" type="button">Cancel</button>
+      <button class="btn primary" id="appeal-submit-ok" type="button">Submit appeal</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal hidden" id="report-modal">
   <div class="modal-card">
     <header class="modal-head">
-      <h3>Report</h3>
+      <h3>Report Message</h3>
       <button class="icon-btn" id="report-close" type="button">close</button>
     </header>
     <form id="report-form" class="form">
+      <div id="report-preview" class="card" style="margin-bottom:16px;padding:12px;background:rgba(255,255,255,0.05);border-radius:4px;display:none;">
+        <div class="muted small" style="margin-bottom:8px;">Message being reported:</div>
+        <div id="report-preview-text" style="word-break:break-word;"></div>
+      </div>
       <label class="field">
         <span>Reason</span>
         <select id="report-reason" class="select" required>
@@ -492,6 +778,9 @@
         <span>Details <span class="hint">optional</span></span>
         <textarea id="report-details" rows="3" maxlength="2000" placeholder="Additional context…"></textarea>
       </label>
+      <div style="background:rgba(255,165,0,0.1);border-left:3px solid #ffa500;padding:12px;margin:16px 0;border-radius:2px;">
+        <p class="muted small" style="margin:0;">⚠️ <strong>Privacy Notice:</strong> This message will be decrypted and sent unencrypted to moderators for review. They will be able to see the full content to take appropriate action.</p>
+      </div>
       <p id="report-error" class="form-error hidden"></p>
       <div class="modal-foot">
         <button class="btn ghost" type="button" id="report-cancel">Cancel</button>
@@ -509,18 +798,6 @@
 </div>
 
 <script type="module" src="/static/js/app.js"></script>
-
-<!-- Service Worker Registration -->
-<script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/static/js/sw.js', { scope: '/' })
-    .then((registration) => {
-      console.log('Service Worker registered:', registration);
-    })
-    .catch((error) => {
-      console.log('Service Worker registration failed:', error);
-    });
-}
-</script>
+<script src="/static/js/sw-register.js"></script>
 </body>
 </html>
