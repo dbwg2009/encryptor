@@ -623,6 +623,27 @@
   </div>
 </div>
 
+<div class="modal hidden" id="restore-modal">
+  <div class="modal-card sm">
+    <header class="modal-head"><h3>Restore this account</h3></header>
+    <form id="restore-form" class="form">
+      <label class="field">
+        <span>Reason for restoration</span>
+        <select id="restore-reason">
+          <option value="">Select a reason...</option>
+          <option value="Appeal approved">Appeal approved</option>
+          <option value="Manual review - no violation found">Manual review - no violation found</option>
+          <option value="Mistaken suspension">Mistaken suspension</option>
+        </select>
+      </label>
+    </form>
+    <div class="modal-foot">
+      <button class="btn ghost" id="restore-cancel" type="button">Cancel</button>
+      <button class="btn primary" id="restore-ok" type="button">Restore</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal hidden" id="submit-appeal-modal">
   <div class="modal-card sm">
     <header class="modal-head"><h3>Appeal your restriction</h3></header>

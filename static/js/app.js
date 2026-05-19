@@ -146,6 +146,41 @@ function actionDialog(title) {
   });
 }
 
+function restoreDialog() {
+  return new Promise((resolve) => {
+    const m = $("restore-modal");
+    const form = $("restore-form");
+    const reason = $("restore-reason");
+    const ok = $("restore-ok");
+    const cancel = $("restore-cancel");
+
+    form.reset();
+
+    const close = (v) => {
+      m.classList.add("hidden");
+      ok.removeEventListener("click", onOk);
+      cancel.removeEventListener("click", onCancel);
+      form.removeEventListener("submit", onSubmit);
+      resolve(v);
+    };
+    const onOk = () => {
+      if (!reason.value) {
+        reason.focus();
+        return;
+      }
+      close({ reason: reason.value });
+    };
+    const onCancel = () => close(null);
+    const onSubmit = (e) => { e.preventDefault(); onOk(); };
+
+    ok.addEventListener("click", onOk);
+    cancel.addEventListener("click", onCancel);
+    form.addEventListener("submit", onSubmit);
+    m.classList.remove("hidden");
+    reason.focus();
+  });
+}
+
 function fmtTime(unix) {
   if (!unix) return "—";
   const d = new Date(unix * 1000);
@@ -1014,9 +1049,8 @@ async function loadModeration() {
         actionData = await actionDialog("Ban this account?");
         if (!actionData) return;
       } else if (action === "restore") {
-        const reason = prompt("Reason for restoration (optional):", "");
-        if (reason === null) return;
-        actionData = { reason: reason || null };
+        actionData = await restoreDialog();
+        if (!actionData) return;
       }
 
       const payload = { action, ...(actionData && actionData.durationDays ? { duration_days: actionData.durationDays } : {}), ...(actionData && actionData.reason ? { reason: actionData.reason } : {}) };
