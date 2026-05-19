@@ -275,6 +275,7 @@ def _migrate(conn):
         ("messages",       "reply_to_id", "INTEGER REFERENCES messages(id) ON DELETE SET NULL"),
         ("group_messages", "reply_to_id", "INTEGER REFERENCES group_messages(id) ON DELETE SET NULL"),
         ("reports",        "message_content", "TEXT"),
+        ("appeals",        "appeal_type", "TEXT"),
         ("push_subscriptions", None, None),  # table-level check only
     ]
     existing_tables = {r[0] for r in conn.execute(
@@ -521,6 +522,12 @@ class ModChangeRoleIn(BaseModel):
     new_role: str = Field(..., pattern="^(user|moderator|super_moderator)$")
 
 
+class AppealSubmitIn(BaseModel):
+    appeal_type: str = Field(..., pattern="^(mistaken|violated_by_mistake|circumstances_changed)$")
+    email: str = Field(min_length=3, max_length=254)
+    reason: str = Field(min_length=50, max_length=2000)
+
+
 class InviteToGroupIn(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     # The inviter must pre-wrap the group key for the invitee's public key
@@ -618,14 +625,41 @@ def login(body: LoginIn, request: Request, response: Response):
         row = conn.execute("SELECT id, auth_hash, status, suspended_until FROM users WHERE email = ?", (email,)).fetchone()
     if not row:
         raise HTTPException(401, "Invalid credentials")
-    if row["status"] == "banned":
-        raise HTTPException(403, "Account banned")
+
     # Auto-restore if suspension expired
     if row["status"] == "suspended" and row["suspended_until"] and row["suspended_until"] <= now:
         with db() as conn:
             conn.execute("UPDATE users SET status = 'active', suspended_until = NULL WHERE id = ?", (row["id"],))
+        row = dict(row)
+        row["status"] = "active"
+        row["suspended_until"] = None
+
+    # Check suspension/ban status after potential auto-restore
+    if row["status"] == "banned":
+        try:
+            hasher.verify(row["auth_hash"], body.authHash.lower())
+        except (VerifyMismatchError, InvalidHash) as err:
+            raise HTTPException(401, "Invalid credentials") from err
+        return {
+            "id": row["id"],
+            "email": email,
+            "restricted": True,
+            "restrictionType": "banned",
+        }
     elif row["status"] == "suspended":
-        raise HTTPException(403, "Account suspended")
+        try:
+            hasher.verify(row["auth_hash"], body.authHash.lower())
+        except (VerifyMismatchError, InvalidHash) as err:
+            raise HTTPException(401, "Invalid credentials") from err
+        time_remaining = (row["suspended_until"] - now) if row["suspended_until"] else None
+        return {
+            "id": row["id"],
+            "email": email,
+            "restricted": True,
+            "restrictionType": "suspended",
+            "timeRemaining": time_remaining,
+        }
+
     try:
         hasher.verify(row["auth_hash"], body.authHash.lower())
     except (VerifyMismatchError, InvalidHash) as err:
@@ -634,7 +668,7 @@ def login(body: LoginIn, request: Request, response: Response):
     _log_login(row["id"], request)
     with db() as conn:
         conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (now, row["id"]))
-    return {"id": row["id"], "email": email}
+    return {"id": row["id"], "email": email, "restricted": False}
 
 
 @app.post("/api/auth/verify")
@@ -1719,8 +1753,11 @@ def get_audit_log(user = Depends(require_moderator), limit: int = 100, offset: i
 
 
 @app.post("/api/appeals")
-def create_appeal(body: ModUserActionIn, user = Depends(auth_dep)):
+def create_appeal(body: AppealSubmitIn, user = Depends(auth_dep)):
     """Allow suspended/banned users to appeal their status."""
+    if body.email.lower() != user["email"].lower():
+        raise HTTPException(400, "Email does not match your account")
+
     now = int(time.time())
     with db() as conn:
         user_row = conn.execute("SELECT id, status FROM users WHERE id = ?", (user["id"],)).fetchone()
@@ -1737,11 +1774,36 @@ def create_appeal(body: ModUserActionIn, user = Depends(auth_dep)):
 
         # Create appeal
         conn.execute(
-            "INSERT INTO appeals (user_id, status, reason, created_at) VALUES (?, ?, ?, ?)",
-            (user["id"], "pending", body.reason, now)
+            "INSERT INTO appeals (user_id, status, appeal_type, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user["id"], "pending", body.appeal_type, body.reason, now)
         )
 
     return {"ok": True, "message": "Appeal submitted successfully"}
+
+
+@app.get("/api/appeals/status")
+def get_appeal_status(user = Depends(require_user)):
+    """Get current user's appeal status."""
+    with db() as conn:
+        appeal = conn.execute(
+            """SELECT id, status, reason, response, appeal_type, created_at, reviewed_at
+               FROM appeals WHERE user_id = ? ORDER BY created_at DESC LIMIT 1""",
+            (user["id"],)
+        ).fetchone()
+
+    if not appeal:
+        return {"hasAppeal": False}
+
+    return {
+        "hasAppeal": True,
+        "id": appeal["id"],
+        "status": appeal["status"],
+        "appealType": appeal["appeal_type"],
+        "reason": appeal["reason"],
+        "response": appeal["response"],
+        "createdAt": appeal["created_at"],
+        "reviewedAt": appeal["reviewed_at"],
+    }
 
 
 @app.get("/api/mod/appeals")
