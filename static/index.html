@@ -102,6 +102,79 @@
   </div>
 </section>
 
+<!-- ╔══════════════════ SUSPENSION VIEW ══════════════════╗ -->
+<section id="view-suspension" class="view view-center hidden">
+  <div class="auth-shell">
+    <div class="brand brand-lg">
+      <div class="logo">AC</div>
+      <h1 id="susp-title">Account Suspended</h1>
+    </div>
+
+    <div class="card auth-card">
+      <div style="padding:20px;text-align:center;">
+        <p id="susp-message" class="muted" style="margin-bottom:16px;"></p>
+        <div id="susp-time-remain" style="font-size:18px;margin:16px 0;"><b id="susp-time-text"></b></div>
+        <div class="actions" style="display:flex;gap:12px;justify-content:center;margin-top:24px;">
+          <button class="btn primary" id="susp-appeal-btn" type="button">Submit Appeal</button>
+          <button class="btn ghost" id="susp-logout-btn" type="button">Sign out</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ╔══════════════════ APPEAL PAGE ══════════════════╗ -->
+<section id="view-appeal" class="view view-center hidden">
+  <div class="auth-shell">
+    <div class="brand brand-lg">
+      <div class="logo">AC</div>
+      <h1 id="appeal-title">Appeal Your Restriction</h1>
+    </div>
+
+    <div class="card auth-card">
+      <div id="appeal-status-panel" style="display:none;padding:16px;margin-bottom:16px;background:rgba(100,200,100,0.1);border-left:3px solid #64c864;border-radius:4px;">
+        <p id="appeal-status-text" style="margin:0;"></p>
+      </div>
+
+      <form id="appeal-form" class="form">
+        <label class="field">
+          <span>Email</span>
+          <input id="appeal-email" type="email" autocomplete="username" required spellcheck="false" placeholder="your@email.com">
+        </label>
+
+        <label class="field">
+          <span>Appeal Type</span>
+          <select id="appeal-type" required>
+            <option value="">Select reason for appeal...</option>
+            <option value="mistaken">Mistaken ban/suspension</option>
+            <option value="violated_by_mistake">I violated rules by mistake</option>
+            <option value="circumstances_changed">My circumstances have changed</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Appeal Reason (minimum 50 characters)</span>
+          <textarea id="appeal-reason" rows="5" required minlength="50" maxlength="2000" placeholder="Explain why you believe your restriction should be lifted..."></textarea>
+          <small id="appeal-char-count" class="muted" style="display:block;margin-top:4px;">0 / 2000</small>
+        </label>
+
+        <p id="appeal-error" class="form-error hidden"></p>
+        <div class="modal-foot" style="margin-top:20px;">
+          <button class="btn ghost" type="button" id="appeal-cancel">Back</button>
+          <button class="btn primary" type="submit">Submit Appeal</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="appeal-success-panel" style="display:none;text-align:center;padding:20px;">
+      <h2 style="color:#64c864;margin-bottom:16px;">Appeal Submitted</h2>
+      <p class="muted" style="margin-bottom:12px;">Your appeal has been submitted to the moderators.</p>
+      <p id="appeal-success-id" class="muted" style="font-size:12px;margin-bottom:20px;"></p>
+      <button class="btn primary" id="appeal-back-btn" type="button">Return to Sign In</button>
+    </div>
+  </div>
+</section>
+
 <!-- ╔══════════════════ APP VIEW ══════════════════╗ -->
 <section id="view-app" class="view hidden">
   <header class="topbar">

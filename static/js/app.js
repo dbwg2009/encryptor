@@ -354,7 +354,15 @@ authForm.addEventListener("submit", async (e) => {
     } else {
       const pre = await api.post("/api/auth/preflight", { email });
       const { authHash, vaultKey } = await deriveAuthAndVault(password, pre.authSalt, pre.iterations);
-      await api.post("/api/auth/login", { email, authHash });
+      const loginRes = await api.post("/api/auth/login", { email, authHash });
+
+      if (loginRes.restricted) {
+        state.userEmail = email;
+        state.loginRestriction = { type: loginRes.restrictionType, timeRemaining: loginRes.timeRemaining };
+        showSuspensionScreen(loginRes.restrictionType, loginRes.timeRemaining);
+        return;
+      }
+
       state.vaultKey = vaultKey;
     }
     await loadUser();
@@ -376,6 +384,81 @@ $("unlock-toggle").addEventListener("click", () => {
   i.type = i.type === "password" ? "text" : "password";
 });
 $("unlock-logout").addEventListener("click", logout);
+
+// ─── Suspension and Appeal Handling ───────────────────────────────────
+function formatTimeRemaining(seconds) {
+  if (!seconds || seconds <= 0) return "Ban is permanent";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  if (days > 0) return `${days} day${days > 1 ? 's' : ''} remaining`;
+  return `${hours} hour${hours > 1 ? 's' : ''} remaining`;
+}
+
+function showSuspensionScreen(type, timeRemaining) {
+  setView("suspension");
+  const title = type === "banned" ? "Account Banned" : "Account Suspended";
+  const message = type === "banned"
+    ? "Your account has been permanently banned."
+    : "Your account has been suspended and you cannot log in.";
+
+  $("susp-title").textContent = title;
+  $("susp-message").textContent = message;
+
+  if (type === "suspended" && timeRemaining) {
+    $("susp-time-remain").style.display = "block";
+    $("susp-time-text").textContent = formatTimeRemaining(timeRemaining);
+  } else {
+    $("susp-time-remain").style.display = "none";
+  }
+}
+
+function showAppealPage() {
+  setView("appeal");
+  $("appeal-form").style.display = "block";
+  $("appeal-success-panel").style.display = "none";
+  $("appeal-email").value = state.userEmail || "";
+  $("appeal-reason").value = "";
+  $("appeal-type").value = "";
+  updateAppealCharCount();
+}
+
+function updateAppealCharCount() {
+  const count = $("appeal-reason").value.length;
+  $("appeal-char-count").textContent = `${count} / 2000`;
+}
+
+$("susp-appeal-btn").addEventListener("click", showAppealPage);
+$("susp-logout-btn").addEventListener("click", () => { setView("auth"); });
+$("appeal-cancel").addEventListener("click", () => { setView("suspension"); });
+$("appeal-reason").addEventListener("input", updateAppealCharCount);
+
+$("appeal-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("appeal-error").classList.add("hidden");
+
+  const email = $("appeal-email").value.trim().toLowerCase();
+  const type = $("appeal-type").value;
+  const reason = $("appeal-reason").value.trim();
+
+  if (!email || !type || reason.length < 50) {
+    return $("appeal-error").textContent = "All fields required (reason: min 50 characters)", void $("appeal-error").classList.remove("hidden");
+  }
+
+  try {
+    busy("Submitting appeal…");
+    const res = await api.post("/api/appeals", { appeal_type: type, email, reason });
+    $("appeal-form").style.display = "none";
+    $("appeal-success-panel").style.display = "block";
+    $("appeal-success-id").textContent = `Appeal ID: ${res.id || "submitted"}`;
+  } catch (err) {
+    $("appeal-error").textContent = err.message || "Failed to submit appeal";
+    $("appeal-error").classList.remove("hidden");
+  } finally {
+    unbusy();
+  }
+});
+
+$("appeal-back-btn").addEventListener("click", () => { setView("auth"); });
 
 $("unlock-form").addEventListener("submit", async (e) => {
   e.preventDefault();
