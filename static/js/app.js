@@ -221,7 +221,7 @@ const state = {
 };
 
 function setView(name) {
-  for (const v of ["auth", "unlock", "app"]) {
+  for (const v of ["auth", "unlock", "suspension", "appeal", "app"]) {
     $(`view-${v}`).classList.toggle("hidden", v !== name);
   }
 }
