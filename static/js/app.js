@@ -975,6 +975,20 @@ async function loadModeration() {
         line3.textContent = r.details || "No additional details.";
         reportRow.appendChild(line3);
 
+        if (r.messageContent) {
+          const line3b = document.createElement("div");
+          line3b.style.cssText = "margin-top:8px;padding:8px;background:rgba(255,255,255,0.03);border-left:2px solid rgba(255,255,255,0.1);";
+          const contentLabel = document.createElement("div");
+          contentLabel.className = "muted small";
+          contentLabel.textContent = "Message content:";
+          line3b.appendChild(contentLabel);
+          const contentText = document.createElement("div");
+          contentText.textContent = r.messageContent.slice(0, 500) + (r.messageContent.length > 500 ? "…" : "");
+          contentText.style.cssText = "margin-top:4px;word-break:break-word;";
+          line3b.appendChild(contentText);
+          reportRow.appendChild(line3b);
+        }
+
         const line4 = document.createElement("div");
         line4.className = "muted small";
         line4.textContent = "DM " + (r.messageId ? "id " + r.messageId : r.groupMessageId ? "group id " + r.groupMessageId : "user report");
@@ -2248,14 +2262,35 @@ async function subscribeToPushNotifications() {
 }
 
 // ── Report modal ──
-let reportingMsgId = null, reportingSenderId = null;
-function showReportModal(msgId, senderId) {
+let reportingMsgId = null, reportingSenderId = null, reportingMsgContent = null;
+async function showReportModal(msgId, senderId) {
   reportingMsgId = msgId;
   reportingSenderId = senderId;
+  reportingMsgContent = null;
   $("report-reason").value = "";
   $("report-details").value = "";
   $("report-error").classList.add("hidden");
+  $("report-preview").style.display = "none";
   $("report-modal").classList.remove("hidden");
+
+  const msg = state.messages.find(x => x.id === msgId);
+  if (msg) {
+    try {
+      let decrypted;
+      if (state.activeThread.kind === "dm") {
+        decrypted = await tryDecryptDm(msg.ciphertext, state.activeThread.peerId);
+      } else {
+        decrypted = await decryptToken(msg.ciphertext, state.activeThread.key);
+      }
+      if (decrypted.ok) {
+        reportingMsgContent = decrypted.text;
+        $("report-preview-text").textContent = decrypted.text.slice(0, 200) + (decrypted.text.length > 200 ? "…" : "");
+        $("report-preview").style.display = "block";
+      }
+    } catch (err) {
+      // Preview failed, continue without it
+    }
+  }
   setTimeout(() => $("report-reason").focus(), 30);
 }
 $("report-close").addEventListener("click", () => $("report-modal").classList.add("hidden"));
@@ -2265,11 +2300,19 @@ $("report-form").addEventListener("submit", async (e) => {
   const reason = $("report-reason").value;
   if (!reason) return;
   try {
+    const ok = await confirmDialog({
+      title: "Submit this report?",
+      body: "The moderators will see the decrypted message and investigate this report.",
+      okText: "Submit report",
+    });
+    if (!ok) return;
+
     await api.post("/api/report", {
       messageId: reportingMsgId,
       reportedUserId: reportingSenderId,
       reason,
       details: $("report-details").value || undefined,
+      messageContent: reportingMsgContent,
     });
     $("report-modal").classList.add("hidden");
     toast("Report submitted. Thank you.", "info");
