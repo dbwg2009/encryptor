@@ -40,6 +40,18 @@ CSRF_HEADER = "X-CSRF-Token"
 PBKDF2_ITERATIONS = 200_000
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
+# List of email addresses that should be registered as moderators.
+# Set via CIPHER_MODERATOR_EMAILS environment variable (comma-separated emails).
+# Example: export CIPHER_MODERATOR_EMAILS="mod1@example.com,mod2@example.com"
+# If not set, all registered users will be regular users (role='user')
+MODERATOR_EMAILS = {
+    email.strip().lower()
+    for email in os.environ.get("CIPHER_MODERATOR_EMAILS", "").split(",")
+    if email.strip()
+}
+
+START_TIME = int(time.time())
+
 # Group invite tokens expire after 7 days
 GROUP_INVITE_TTL = 7 * 24 * 60 * 60
 
@@ -56,6 +68,9 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT UNIQUE NOT NULL,
   auth_salt BLOB NOT NULL,
   auth_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user',
+  status TEXT NOT NULL DEFAULT 'active',
+  suspended_until INTEGER,
   created_at INTEGER NOT NULL,
   last_login_at INTEGER
 );
@@ -162,6 +177,7 @@ CREATE TABLE IF NOT EXISTS reports (
   group_message_id INTEGER REFERENCES group_messages(id) ON DELETE SET NULL,
   reason TEXT NOT NULL,
   details TEXT,
+  message_content TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at DESC);
@@ -224,14 +240,42 @@ CREATE TABLE IF NOT EXISTS group_invites (
 );
 CREATE INDEX IF NOT EXISTS idx_group_invites_invitee ON group_invites(invitee_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_group_invites_group   ON group_invites(group_id);
+CREATE TABLE IF NOT EXISTS mod_actions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  mod_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  action      TEXT NOT NULL,
+  reason      TEXT,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mod_actions_mod ON mod_actions(mod_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mod_actions_target ON mod_actions(target_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mod_actions_time ON mod_actions(created_at DESC);
+CREATE TABLE IF NOT EXISTS appeals (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status      TEXT NOT NULL DEFAULT 'pending',
+  reason      TEXT NOT NULL,
+  response    TEXT,
+  created_at  INTEGER NOT NULL,
+  reviewed_at INTEGER,
+  reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_appeals_user ON appeals(user_id);
+CREATE INDEX IF NOT EXISTS idx_appeals_status ON appeals(status, created_at DESC);
 """
 
 
 def _migrate(conn):
     """Apply additive column migrations safely."""
     migrations = [
+        ("users",          "role", "TEXT NOT NULL DEFAULT 'user'"),
+        ("users",          "status", "TEXT NOT NULL DEFAULT 'active'"),
+        ("users",          "suspended_until", "INTEGER"),
         ("messages",       "reply_to_id", "INTEGER REFERENCES messages(id) ON DELETE SET NULL"),
         ("group_messages", "reply_to_id", "INTEGER REFERENCES group_messages(id) ON DELETE SET NULL"),
+        ("reports",        "message_content", "TEXT"),
+        ("appeals",        "appeal_type", "TEXT"),
         ("push_subscriptions", None, None),  # table-level check only
     ]
     existing_tables = {r[0] for r in conn.execute(
@@ -321,19 +365,28 @@ def make_session(user_id: int, request: Request, response: Response):
     set_cookie(response, CSRF_COOKIE, csrf, request, http_only=False)
 
 
+def is_super_moderator(user: sqlite3.Row) -> bool:
+    return user["role"] == "super_moderator"
+
+
+def is_moderator_row(user: sqlite3.Row) -> bool:
+    return user["role"] in ("moderator", "super_moderator")
+
+
 def current_user(request: Request) -> Optional[sqlite3.Row]:
     sid = request.cookies.get(SESSION_COOKIE)
     if not sid:
         return None
     with db() as conn:
         row = conn.execute(
-            """SELECT u.id, u.email, u.auth_salt, u.auth_hash, u.created_at, u.last_login_at,
+            """SELECT u.id, u.email, u.auth_salt, u.auth_hash, u.role, u.status,
+                      u.created_at, u.last_login_at,
                       s.id AS sess_id, s.csrf AS sess_csrf, s.expires_at AS sess_exp
                  FROM sessions s JOIN users u ON u.id = s.user_id
                 WHERE s.id = ?""",
             (sid,)
         ).fetchone()
-    if not row or row["sess_exp"] < int(time.time()):
+    if not row or row["sess_exp"] < int(time.time()) or row["status"] == "banned":
         return None
     return row
 
@@ -361,6 +414,19 @@ def require_csrf(request: Request, user):
 def auth_dep(request: Request):
     user = require_user(request)
     require_csrf(request, user)
+    return user
+
+
+def require_active_user(request: Request, user = Depends(require_user)):
+    require_csrf(request, user)
+    if user["status"] != "active":
+        raise HTTPException(403, "Account suspended")
+    return user
+
+
+def require_moderator(user = Depends(require_active_user)):
+    if not is_moderator_row(user):
+        raise HTTPException(403, "Moderator access required")
     return user
 
 
@@ -441,8 +507,25 @@ class ReportIn(BaseModel):
     reportedUserId: Optional[int] = None
     messageId: Optional[int] = None
     groupMessageId: Optional[int] = None
-    reason: str = Field(min_length=5, max_length=500)
+    reason: str = Field(min_length=1, max_length=500)
     details: Optional[str] = Field(default=None, max_length=2000)
+    messageContent: Optional[str] = Field(default=None, max_length=10000)
+
+
+class ModUserActionIn(BaseModel):
+    action: str = Field(..., pattern="^(suspend|ban|restore|approve|reject)$")
+    duration_days: Optional[int] = Field(default=7, ge=1, le=365)  # For suspend action only
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class ModChangeRoleIn(BaseModel):
+    new_role: str = Field(..., pattern="^(user|moderator|super_moderator)$")
+
+
+class AppealSubmitIn(BaseModel):
+    appeal_type: str = Field(..., pattern="^(mistaken|violated_by_mistake|circumstances_changed)$")
+    email: str = Field(min_length=3, max_length=254)
+    reason: str = Field(min_length=50, max_length=2000)
 
 
 class InviteToGroupIn(BaseModel):
@@ -478,6 +561,7 @@ async def security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
     response.headers["Permissions-Policy"] = "interest-cohort=(), browsing-topics=()"
+    response.headers["Service-Worker-Allowed"] = "/"
     if not request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-store"
     response.headers["Content-Security-Policy"] = (
@@ -518,11 +602,12 @@ def register(body: RegisterIn, request: Request, response: Response):
     salt_bytes = bytes.fromhex(body.authSalt)
     auth_hash_stored = hasher.hash(body.authHash.lower())
     now = int(time.time())
+    role = "moderator" if email in MODERATOR_EMAILS else "user"
     with db() as conn:
         try:
             cur = conn.execute(
-                "INSERT INTO users (email, auth_salt, auth_hash, created_at, last_login_at) VALUES (?,?,?,?,?)",
-                (email, salt_bytes, auth_hash_stored, now, now)
+                "INSERT INTO users (email, auth_salt, auth_hash, role, status, created_at, last_login_at) VALUES (?,?,?,?,?,?,?)",
+                (email, salt_bytes, auth_hash_stored, role, "active", now, now)
             )
         except sqlite3.IntegrityError:
             raise HTTPException(409, "Email already registered")
@@ -535,19 +620,55 @@ def register(body: RegisterIn, request: Request, response: Response):
 def login(body: LoginIn, request: Request, response: Response):
     rate_limit(f"login:{client_ip(request)}", 10, 60)
     email = body.email.lower().strip()
+    now = int(time.time())
     with db() as conn:
-        row = conn.execute("SELECT id, auth_hash FROM users WHERE email = ?", (email,)).fetchone()
+        row = conn.execute("SELECT id, auth_hash, status, suspended_until FROM users WHERE email = ?", (email,)).fetchone()
     if not row:
         raise HTTPException(401, "Invalid credentials")
+
+    # Auto-restore if suspension expired
+    if row["status"] == "suspended" and row["suspended_until"] and row["suspended_until"] <= now:
+        with db() as conn:
+            conn.execute("UPDATE users SET status = 'active', suspended_until = NULL WHERE id = ?", (row["id"],))
+        row = dict(row)
+        row["status"] = "active"
+        row["suspended_until"] = None
+
+    # Check suspension/ban status after potential auto-restore
+    if row["status"] == "banned":
+        try:
+            hasher.verify(row["auth_hash"], body.authHash.lower())
+        except (VerifyMismatchError, InvalidHash) as err:
+            raise HTTPException(401, "Invalid credentials") from err
+        return {
+            "id": row["id"],
+            "email": email,
+            "restricted": True,
+            "restrictionType": "banned",
+        }
+    elif row["status"] == "suspended":
+        try:
+            hasher.verify(row["auth_hash"], body.authHash.lower())
+        except (VerifyMismatchError, InvalidHash) as err:
+            raise HTTPException(401, "Invalid credentials") from err
+        time_remaining = (row["suspended_until"] - now) if row["suspended_until"] else None
+        return {
+            "id": row["id"],
+            "email": email,
+            "restricted": True,
+            "restrictionType": "suspended",
+            "timeRemaining": time_remaining,
+        }
+
     try:
         hasher.verify(row["auth_hash"], body.authHash.lower())
-    except (VerifyMismatchError, InvalidHash):
-        raise HTTPException(401, "Invalid credentials")
+    except (VerifyMismatchError, InvalidHash) as err:
+        raise HTTPException(401, "Invalid credentials") from err
     make_session(row["id"], request, response)
     _log_login(row["id"], request)
     with db() as conn:
-        conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (int(time.time()), row["id"]))
-    return {"id": row["id"], "email": email}
+        conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (now, row["id"]))
+    return {"id": row["id"], "email": email, "restricted": False}
 
 
 @app.post("/api/auth/verify")
@@ -556,8 +677,8 @@ def verify_password(body: LoginIn, user = Depends(auth_dep)):
         raise HTTPException(403, "Email mismatch")
     try:
         hasher.verify(user["auth_hash"], body.authHash.lower())
-    except (VerifyMismatchError, InvalidHash):
-        raise HTTPException(401, "Wrong password")
+    except (VerifyMismatchError, InvalidHash) as err:
+        raise HTTPException(401, "Wrong password") from err
     return {"ok": True}
 
 
@@ -581,6 +702,9 @@ def me(user = Depends(require_user)):
         "createdAt": user["created_at"],
         "lastLoginAt": user["last_login_at"],
         "iterations": PBKDF2_ITERATIONS,
+        "role": user["role"],
+        "status": user["status"],
+        "isModerator": is_moderator_row(user),
     }
 
 
@@ -888,7 +1012,7 @@ def _grant_media_access(conn, media_ids: list[str], uploader_id: int, recipient_
 
 
 @app.post("/api/messages", status_code=201)
-def message_send(body: MessageIn, user = Depends(auth_dep)):
+def message_send(body: MessageIn, user = Depends(require_active_user)):
     if body.recipientId == user["id"]:
         raise HTTPException(400, "Cannot message yourself")
     with db() as conn:
@@ -908,7 +1032,7 @@ def message_send(body: MessageIn, user = Depends(auth_dep)):
 
 
 @app.post("/api/messages/{msg_id}/read")
-def message_mark_read(msg_id: int, user = Depends(auth_dep)):
+def message_mark_read(msg_id: int, user = Depends(require_active_user)):
     now = int(time.time())
     with db() as conn:
         conn.execute(
@@ -919,7 +1043,7 @@ def message_mark_read(msg_id: int, user = Depends(auth_dep)):
 
 
 @app.delete("/api/messages/{msg_id}")
-def message_delete(msg_id: int, user = Depends(auth_dep)):
+def message_delete(msg_id: int, user = Depends(require_active_user)):
     with db() as conn:
         row = conn.execute(
             "SELECT sender_id, recipient_id FROM messages WHERE id = ?", (msg_id,)
@@ -1044,7 +1168,7 @@ def group_preflight(group_id: int, user = Depends(require_user)):
 
 
 @app.post("/api/groups/{group_id}/join", status_code=201)
-def group_join(group_id: int, body: GroupJoinIn, request: Request, user = Depends(auth_dep)):
+def group_join(group_id: int, body: GroupJoinIn, request: Request, user = Depends(require_active_user)):
     rate_limit(f"groupjoin:{client_ip(request)}", 20, 60)
     with db() as conn:
         g = conn.execute("SELECT verifier_hash FROM groups WHERE id = ?", (group_id,)).fetchone()
@@ -1072,7 +1196,7 @@ def group_join(group_id: int, body: GroupJoinIn, request: Request, user = Depend
 
 
 @app.post("/api/groups/{group_id}/leave")
-def group_leave(group_id: int, user = Depends(auth_dep)):
+def group_leave(group_id: int, user = Depends(require_active_user)):
     with db() as conn:
         _require_group_member(conn, group_id, user["id"])
         conn.execute("DELETE FROM group_members WHERE group_id = ? AND user_id = ?", (group_id, user["id"]))
@@ -1083,7 +1207,7 @@ def group_leave(group_id: int, user = Depends(auth_dep)):
 
 
 @app.get("/api/groups/{group_id}/messages")
-def group_messages_list(group_id: int, limit: int = 200, user = Depends(require_user)):
+def group_messages_list(group_id: int, limit: int = 200, user = Depends(require_active_user)):
     limit = max(1, min(limit, 500))
     with db() as conn:
         _require_group_member(conn, group_id, user["id"])
@@ -1113,7 +1237,7 @@ def group_messages_list(group_id: int, limit: int = 200, user = Depends(require_
 
 
 @app.post("/api/groups/{group_id}/messages", status_code=201)
-def group_message_send(group_id: int, body: GroupMessageIn, user = Depends(auth_dep)):
+def group_message_send(group_id: int, body: GroupMessageIn, user = Depends(require_active_user)):
     with db() as conn:
         _require_group_member(conn, group_id, user["id"])
         now = int(time.time())
@@ -1147,7 +1271,7 @@ def group_mark_read(group_id: int, user = Depends(auth_dep)):
 
 
 @app.delete("/api/groups/{group_id}/messages/{msg_id}")
-def group_message_delete(group_id: int, msg_id: int, user = Depends(auth_dep)):
+def group_message_delete(group_id: int, msg_id: int, user = Depends(require_active_user)):
     with db() as conn:
         _require_group_member(conn, group_id, user["id"])
         row = conn.execute(
@@ -1420,28 +1544,381 @@ def list_blocked(user = Depends(auth_dep)):
 # ── Reports ───────────────────────────────────────────────────────────────────
 
 @app.post("/api/report", status_code=201)
-def report(body: ReportIn, user = Depends(auth_dep)):
+def report(body: ReportIn, user = Depends(require_active_user)):
     if not body.reportedUserId and not body.messageId and not body.groupMessageId:
         raise HTTPException(400, "Must report a user or message")
     now = int(time.time())
     with db() as conn:
         cur = conn.execute(
-            "INSERT INTO reports (reporter_id, reported_user_id, message_id, group_message_id, reason, details, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (user["id"], body.reportedUserId, body.messageId, body.groupMessageId, body.reason, body.details, now)
+            "INSERT INTO reports (reporter_id, reported_user_id, message_id, group_message_id, reason, details, message_content, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (user["id"], body.reportedUserId, body.messageId, body.groupMessageId, body.reason, body.details, body.messageContent, now)
         )
     return {"id": cur.lastrowid}
 
 
-# ── Session management ────────────────────────────────────────────────────────
+@app.get("/api/mod/stats")
+def mod_stats(user = Depends(require_moderator)):
+    with db() as conn:
+        total_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        total_active = conn.execute("SELECT COUNT(*) FROM users WHERE status = 'active'").fetchone()[0]
+        total_suspended = conn.execute("SELECT COUNT(*) FROM users WHERE status = 'suspended'").fetchone()[0]
+        total_banned = conn.execute("SELECT COUNT(*) FROM users WHERE status = 'banned'").fetchone()[0]
+        total_messages = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        total_reports = conn.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+        recent_reports = conn.execute("SELECT COUNT(*) FROM reports WHERE created_at > ?", (int(time.time()) - 86400,)).fetchone()[0]
+    return {
+        "totalUsers": total_users,
+        "activeUsers": total_active,
+        "suspendedUsers": total_suspended,
+        "bannedUsers": total_banned,
+        "totalMessages": total_messages,
+        "totalReports": total_reports,
+        "recentReports": recent_reports,
+        "serverUptime": int(time.time()) - START_TIME,
+        "now": int(time.time()),
+    }
+
+
+@app.get("/api/mod/reports")
+def mod_reports(limit: int = 100, offset: int = 0, user = Depends(require_moderator)):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    with db() as conn:
+        rows = conn.execute(
+            """SELECT r.id, r.reason, r.details, r.created_at,
+                        r.message_id, r.group_message_id, r.message_content,
+                        r.reporter_id, rep.email AS reporter_email,
+                        r.reported_user_id, tgt.email AS reported_email
+                   FROM reports r
+                   LEFT JOIN users rep ON rep.id = r.reporter_id
+                   LEFT JOIN users tgt ON tgt.id = r.reported_user_id
+                  ORDER BY r.created_at DESC LIMIT ? OFFSET ?""",
+            (limit, offset)
+        ).fetchall()
+    return [{
+        "id": r["id"],
+        "reason": r["reason"],
+        "details": r["details"],
+        "createdAt": r["created_at"],
+        "messageId": r["message_id"],
+        "groupMessageId": r["group_message_id"],
+        "messageContent": r["message_content"],
+        "reporterId": r["reporter_id"],
+        "reporterEmail": r["reporter_email"],
+        "reportedUserId": r["reported_user_id"],
+        "reportedUserEmail": r["reported_email"],
+    } for r in rows]
+
+
+@app.get("/api/mod/users")
+def mod_users(limit: int = 200, offset: int = 0, user = Depends(require_moderator)):
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, email, role, status, created_at, last_login_at FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        ).fetchall()
+    return [{
+        "id": r["id"],
+        "email": r["email"],
+        "role": r["role"],
+        "status": r["status"],
+        "createdAt": r["created_at"],
+        "lastLoginAt": r["last_login_at"],
+    } for r in rows]
+
+
+@app.post("/api/mod/users/{user_id}/status")
+def mod_user_status(user_id: int, body: ModUserActionIn, user = Depends(require_moderator)):
+    if user_id == user["id"]:
+        raise HTTPException(400, "Cannot modify your own account")
+
+    now = int(time.time())
+    with db() as conn:
+        target = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not target:
+            raise HTTPException(404, "User not found")
+
+        # Determine new status and suspended_until
+        if body.action == "suspend":
+            new_status = "suspended"
+            suspended_until = now + (body.duration_days * 86400) if body.duration_days else now + (7 * 86400)
+        elif body.action == "ban":
+            new_status = "banned"
+            suspended_until = None
+        else:  # restore
+            new_status = "active"
+            suspended_until = None
+
+        # Permission checks: only super_moderators can modify moderators
+        target_is_mod = target["role"] in ("moderator", "super_moderator")
+        if target_is_mod and not is_super_moderator(user):
+            raise HTTPException(403, "Only super moderators can modify moderators")
+
+        # Update user status
+        conn.execute(
+            "UPDATE users SET status = ?, suspended_until = ? WHERE id = ?",
+            (new_status, suspended_until, user_id)
+        )
+
+        # Log action to audit log
+        action_str = body.action
+        if body.action == "suspend" and body.duration_days:
+            action_str = f"suspend_{body.duration_days}d"
+
+        conn.execute(
+            "INSERT INTO mod_actions (mod_id, target_id, action, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user["id"], user_id, action_str, body.reason, now)
+        )
+
+        # Revoke sessions if suspending or banning
+        if new_status in ("banned", "suspended"):
+            conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+
+    return {"ok": True}
+
+
+@app.post("/api/mod/users/{user_id}/role")
+def mod_change_role(user_id: int, body: ModChangeRoleIn, user = Depends(require_moderator)):
+    if user_id == user["id"]:
+        raise HTTPException(400, "Cannot change your own role")
+    if not is_super_moderator(user):
+        raise HTTPException(403, "Only super moderators can change roles")
+
+    now = int(time.time())
+    with db() as conn:
+        target = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not target:
+            raise HTTPException(404, "User not found")
+        conn.execute("UPDATE users SET role = ? WHERE id = ?", (body.new_role, user_id))
+
+        # Log action to audit log
+        conn.execute(
+            "INSERT INTO mod_actions (mod_id, target_id, action, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user["id"], user_id, f"role_change_{body.new_role}", f"Changed from {target['role']}", now)
+        )
+
+    return {"ok": True, "newRole": body.new_role}
+
+
+@app.get("/api/mod/audit-log")
+def get_audit_log(user = Depends(require_moderator), limit: int = 100, offset: int = 0):
+    """Get audit log of moderator actions. Limited to 100 entries by default."""
+    if limit > 500:
+        limit = 500
+    if limit < 1:
+        limit = 1
+    if offset < 0:
+        offset = 0
+
+    with db() as conn:
+        # Get total count
+        total = conn.execute("SELECT COUNT(*) as cnt FROM mod_actions").fetchone()["cnt"]
+
+        # Get audit log entries ordered by most recent first
+        rows = conn.execute(
+            """SELECT ma.id, ma.mod_id, ma.target_id, ma.action, ma.reason, ma.created_at,
+                      mod_user.email as mod_email,
+                      target_user.email as target_email
+               FROM mod_actions ma
+               LEFT JOIN users mod_user ON ma.mod_id = mod_user.id
+               LEFT JOIN users target_user ON ma.target_id = target_user.id
+               ORDER BY ma.created_at DESC
+               LIMIT ? OFFSET ?""",
+            (limit, offset)
+        ).fetchall()
+
+    entries = [
+        {
+            "id": r["id"],
+            "modId": r["mod_id"],
+            "modUsername": r["mod_email"],
+            "targetId": r["target_id"],
+            "targetUsername": r["target_email"],
+            "action": r["action"],
+            "reason": r["reason"],
+            "createdAt": r["created_at"]
+        }
+        for r in rows
+    ]
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "entries": entries
+    }
+
+
+@app.post("/api/appeals")
+def create_appeal(body: AppealSubmitIn, user = Depends(auth_dep)):
+    """Allow suspended/banned users to appeal their status."""
+    if body.email.lower() != user["email"].lower():
+        raise HTTPException(400, "Email does not match your account")
+
+    now = int(time.time())
+    with db() as conn:
+        user_row = conn.execute("SELECT id, status FROM users WHERE id = ?", (user["id"],)).fetchone()
+        if user_row["status"] == "active":
+            raise HTTPException(400, "Only suspended or banned users can appeal")
+
+        # Check if user already has a pending appeal
+        existing = conn.execute(
+            "SELECT id FROM appeals WHERE user_id = ? AND status = 'pending'",
+            (user["id"],)
+        ).fetchone()
+        if existing:
+            raise HTTPException(400, "You already have a pending appeal")
+
+        # Create appeal
+        conn.execute(
+            "INSERT INTO appeals (user_id, status, appeal_type, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user["id"], "pending", body.appeal_type, body.reason, now)
+        )
+
+    return {"ok": True, "message": "Appeal submitted successfully"}
+
+
+@app.get("/api/appeals/status")
+def get_appeal_status(user = Depends(require_user)):
+    """Get current user's appeal status."""
+    with db() as conn:
+        appeal = conn.execute(
+            """SELECT id, status, reason, response, appeal_type, created_at, reviewed_at
+               FROM appeals WHERE user_id = ? ORDER BY created_at DESC LIMIT 1""",
+            (user["id"],)
+        ).fetchone()
+
+    if not appeal:
+        return {"hasAppeal": False}
+
+    return {
+        "hasAppeal": True,
+        "id": appeal["id"],
+        "status": appeal["status"],
+        "appealType": appeal["appeal_type"],
+        "reason": appeal["reason"],
+        "response": appeal["response"],
+        "createdAt": appeal["created_at"],
+        "reviewedAt": appeal["reviewed_at"],
+    }
+
+
+@app.get("/api/mod/appeals")
+def get_appeals(user = Depends(require_moderator), status: str = "pending", limit: int = 50, offset: int = 0):
+    """Get appeals for moderator review."""
+    # Validate status parameter to prevent SQL injection
+    valid_statuses = {"pending", "approved", "rejected"}
+    if status and status not in valid_statuses:
+        raise HTTPException(400, "Invalid status value")
+
+    if limit > 500:
+        limit = 500
+    if limit < 1:
+        limit = 1
+    if offset < 0:
+        offset = 0
+
+    with db() as conn:
+        # Get total count
+        if status:
+            total = conn.execute("SELECT COUNT(*) as cnt FROM appeals WHERE status = ?", (status,)).fetchone()["cnt"]
+        else:
+            total = conn.execute("SELECT COUNT(*) as cnt FROM appeals").fetchone()["cnt"]
+
+        # Get appeals
+        if status:
+            rows = conn.execute(
+                """SELECT a.id, a.user_id, a.status, a.reason, a.response, a.created_at, a.reviewed_at,
+                          a.reviewed_by, u.email
+                   FROM appeals a
+                   LEFT JOIN users u ON a.user_id = u.id
+                   WHERE a.status = ?
+                   ORDER BY a.created_at DESC LIMIT ? OFFSET ?""",
+                (status, limit, offset)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT a.id, a.user_id, a.status, a.reason, a.response, a.created_at, a.reviewed_at,
+                          a.reviewed_by, u.email
+                   FROM appeals a
+                   LEFT JOIN users u ON a.user_id = u.id
+                   ORDER BY a.created_at DESC LIMIT ? OFFSET ?""",
+                (limit, offset)
+            ).fetchall()
+
+    entries = [
+        {
+            "id": r["id"],
+            "userId": r["user_id"],
+            "userEmail": r["email"],
+            "status": r["status"],
+            "reason": r["reason"],
+            "response": r["response"],
+            "createdAt": r["created_at"],
+            "reviewedAt": r["reviewed_at"]
+        }
+        for r in rows
+    ]
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "entries": entries
+    }
+
+
+@app.post("/api/mod/appeals/{appeal_id}")
+def review_appeal(appeal_id: int, body: ModUserActionIn, user = Depends(require_moderator)):
+    """Review and approve/reject an appeal."""
+    if body.action not in ("approve", "reject"):
+        raise HTTPException(400, "Action must be 'approve' or 'reject'")
+
+    now = int(time.time())
+    with db() as conn:
+        appeal = conn.execute("SELECT user_id, status FROM appeals WHERE id = ?", (appeal_id,)).fetchone()
+        if not appeal:
+            raise HTTPException(404, "Appeal not found")
+        if appeal["status"] != "pending":
+            raise HTTPException(400, "Appeal already reviewed")
+
+        if body.action == "approve":
+            # Restore user
+            conn.execute(
+                "UPDATE users SET status = 'active', suspended_until = NULL WHERE id = ?",
+                (appeal["user_id"],)
+            )
+            new_status = "approved"
+        else:
+            new_status = "rejected"
+
+        # Update appeal
+        conn.execute(
+            "UPDATE appeals SET status = ?, response = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?",
+            (new_status, body.reason, now, user["id"], appeal_id)
+        )
+
+        # Log action
+        conn.execute(
+            "INSERT INTO mod_actions (mod_id, target_id, action, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user["id"], appeal["user_id"], f"appeal_{new_status}", body.reason, now)
+        )
+
+    return {"ok": True, "status": new_status}
+
+
+# ── Session management ────────────────────────────────────────────────────────────
 
 @app.post("/api/auth/logout-all")
 def logout_all(body: DeleteAccountIn, user = Depends(auth_dep)):
     """Logout all other sessions, require password (auth_hash) verification"""
     try:
         hasher.verify(user["auth_hash"], body.authHash.lower())
-    except (VerifyMismatchError, InvalidHash):
-        raise HTTPException(401, "Wrong password")
+    except (VerifyMismatchError, InvalidHash) as err:
+        raise HTTPException(401, "Wrong password") from err
     with db() as conn:
         conn.execute(
             "DELETE FROM sessions WHERE user_id = ? AND id != ?",

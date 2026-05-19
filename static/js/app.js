@@ -59,6 +59,128 @@ function confirmDialog({ title, body, okText = "Confirm", danger = true }) {
   });
 }
 
+function suspensionDialog() {
+  return new Promise((resolve) => {
+    const m = $("suspension-modal");
+    const form = $("suspension-form");
+    const duration = $("suspension-duration");
+    const template = $("suspension-template");
+    const reason = $("suspension-reason");
+    const ok = $("suspension-ok");
+    const cancel = $("suspension-cancel");
+
+    form.reset();
+
+    const onTemplateChange = () => {
+      if (template.value) {
+        reason.value = template.value;
+      }
+    };
+
+    const close = (v) => {
+      m.classList.add("hidden");
+      ok.removeEventListener("click", onOk);
+      cancel.removeEventListener("click", onCancel);
+      form.removeEventListener("submit", onSubmit);
+      template.removeEventListener("change", onTemplateChange);
+      resolve(v);
+    };
+    const onOk = () => {
+      if (!duration.value) {
+        duration.focus();
+        return;
+      }
+      close({ durationDays: Number(duration.value), reason: reason.value || null });
+    };
+    const onCancel = () => close(null);
+    const onSubmit = (e) => { e.preventDefault(); onOk(); };
+
+    ok.addEventListener("click", onOk);
+    cancel.addEventListener("click", onCancel);
+    form.addEventListener("submit", onSubmit);
+    template.addEventListener("change", onTemplateChange);
+    m.classList.remove("hidden");
+    duration.focus();
+  });
+}
+
+function actionDialog(title) {
+  return new Promise((resolve) => {
+    const m = $("action-modal");
+    const form = $("action-form");
+    const template = $("action-template");
+    const reason = $("action-reason");
+    const ok = $("action-ok");
+    const cancel = $("action-cancel");
+    const titleEl = $("action-modal-title");
+
+    titleEl.textContent = title;
+    form.reset();
+
+    const onTemplateChange = () => {
+      if (template.value) {
+        reason.value = template.value;
+      }
+    };
+
+    const close = (v) => {
+      m.classList.add("hidden");
+      ok.removeEventListener("click", onOk);
+      cancel.removeEventListener("click", onCancel);
+      form.removeEventListener("submit", onSubmit);
+      template.removeEventListener("change", onTemplateChange);
+      resolve(v);
+    };
+    const onOk = () => {
+      close({ reason: reason.value || null });
+    };
+    const onCancel = () => close(null);
+    const onSubmit = (e) => { e.preventDefault(); onOk(); };
+
+    ok.addEventListener("click", onOk);
+    cancel.addEventListener("click", onCancel);
+    form.addEventListener("submit", onSubmit);
+    template.addEventListener("change", onTemplateChange);
+    m.classList.remove("hidden");
+    template.focus();
+  });
+}
+
+function restoreDialog() {
+  return new Promise((resolve) => {
+    const m = $("restore-modal");
+    const form = $("restore-form");
+    const reason = $("restore-reason");
+    const ok = $("restore-ok");
+    const cancel = $("restore-cancel");
+
+    form.reset();
+
+    const close = (v) => {
+      m.classList.add("hidden");
+      ok.removeEventListener("click", onOk);
+      cancel.removeEventListener("click", onCancel);
+      form.removeEventListener("submit", onSubmit);
+      resolve(v);
+    };
+    const onOk = () => {
+      if (!reason.value) {
+        reason.focus();
+        return;
+      }
+      close({ reason: reason.value });
+    };
+    const onCancel = () => close(null);
+    const onSubmit = (e) => { e.preventDefault(); onOk(); };
+
+    ok.addEventListener("click", onOk);
+    cancel.addEventListener("click", onCancel);
+    form.addEventListener("submit", onSubmit);
+    m.classList.remove("hidden");
+    reason.focus();
+  });
+}
+
 function fmtTime(unix) {
   if (!unix) return "—";
   const d = new Date(unix * 1000);
@@ -94,17 +216,26 @@ const state = {
   route: "cipher",
   cipherMode: "encrypt",
   showKey: false,
+  modMode: false,
+  modRoute: "dashboard",
 };
 
 function setView(name) {
-  for (const v of ["auth", "unlock", "app"]) {
+  for (const v of ["auth", "unlock", "suspension", "appeal", "app"]) {
     $(`view-${v}`).classList.toggle("hidden", v !== name);
   }
 }
+function updateModeratorTab() {
+  const btn = $("mod-mode-btn");
+  if (!btn) return;
+  btn.classList.toggle("hidden", !state.user?.isModerator || state.modMode);
+}
 function setRoute(r) {
+  if (r === "moderation") { enterModMode(); return; }
+  if (state.modMode) return;
   state.route = r;
   for (const t of $$("#main-tabs .tab")) t.classList.toggle("active", t.dataset.route === r);
-  for (const p of ["cipher", "vault", "messages", "history", "settings"]) {
+  for (const p of ["cipher", "vault", "messages", "history", "settings", "moderation"]) {
     $(`tab-${p}`).classList.toggle("hidden", p !== r);
     $(`tab-${p}`).classList.toggle("active", p === r);
   }
@@ -113,6 +244,44 @@ function setRoute(r) {
   if (r === "settings") loadSettings();
   if (r === "messages") loadThreads();
   location.hash = r;
+}
+
+function setModRoute(name) {
+  state.modRoute = name;
+  for (const t of $$("#mod-tabs .tab")) t.classList.toggle("active", t.dataset.modRoute === name);
+  for (const p of ["dashboard", "reports", "users", "appeals", "audit"]) {
+    $(`mod-pane-${p}`).classList.toggle("hidden", p !== name);
+  }
+  location.hash = "mod/" + name;
+}
+
+function enterModMode() {
+  if (!state.user?.isModerator) return;
+  state.modMode = true;
+  $("main-tabs").classList.add("hidden");
+  $("mod-tabs").classList.remove("hidden");
+  for (const p of ["cipher", "vault", "messages", "history", "settings"]) {
+    $(`tab-${p}`).classList.add("hidden");
+    $(`tab-${p}`).classList.remove("active");
+  }
+  $("tab-moderation").classList.remove("hidden");
+  $("tab-moderation").classList.add("active");
+  $("mod-mode-btn").textContent = "exit mod";
+  $("mod-mode-btn").title = "Back to app";
+  setModRoute(state.modRoute || "dashboard");
+  loadModeration();
+}
+
+function exitModMode() {
+  state.modMode = false;
+  $("main-tabs").classList.remove("hidden");
+  $("mod-tabs").classList.add("hidden");
+  $("tab-moderation").classList.add("hidden");
+  $("tab-moderation").classList.remove("active");
+  $("mod-mode-btn").textContent = "mod";
+  $("mod-mode-btn").title = "Switch to moderator mode";
+  updateModeratorTab();
+  setRoute(state.route || "cipher");
 }
 
 // ─── Auth view ─────────────────────────────────────────────────
@@ -185,7 +354,15 @@ authForm.addEventListener("submit", async (e) => {
     } else {
       const pre = await api.post("/api/auth/preflight", { email });
       const { authHash, vaultKey } = await deriveAuthAndVault(password, pre.authSalt, pre.iterations);
-      await api.post("/api/auth/login", { email, authHash });
+      const loginRes = await api.post("/api/auth/login", { email, authHash });
+
+      if (loginRes.restricted) {
+        state.userEmail = email;
+        state.loginRestriction = { type: loginRes.restrictionType, timeRemaining: loginRes.timeRemaining };
+        showSuspensionScreen(loginRes.restrictionType, loginRes.timeRemaining);
+        return;
+      }
+
       state.vaultKey = vaultKey;
     }
     await loadUser();
@@ -207,6 +384,81 @@ $("unlock-toggle").addEventListener("click", () => {
   i.type = i.type === "password" ? "text" : "password";
 });
 $("unlock-logout").addEventListener("click", logout);
+
+// ─── Suspension and Appeal Handling ───────────────────────────────────
+function formatTimeRemaining(seconds) {
+  if (!seconds || seconds <= 0) return "Ban is permanent";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  if (days > 0) return `${days} day${days > 1 ? 's' : ''} remaining`;
+  return `${hours} hour${hours > 1 ? 's' : ''} remaining`;
+}
+
+function showSuspensionScreen(type, timeRemaining) {
+  setView("suspension");
+  const title = type === "banned" ? "Account Banned" : "Account Suspended";
+  const message = type === "banned"
+    ? "Your account has been permanently banned."
+    : "Your account has been suspended and you cannot log in.";
+
+  $("susp-title").textContent = title;
+  $("susp-message").textContent = message;
+
+  if (type === "suspended" && timeRemaining) {
+    $("susp-time-remain").style.display = "block";
+    $("susp-time-text").textContent = formatTimeRemaining(timeRemaining);
+  } else {
+    $("susp-time-remain").style.display = "none";
+  }
+}
+
+function showAppealPage() {
+  setView("appeal");
+  $("appeal-form").style.display = "block";
+  $("appeal-success-panel").style.display = "none";
+  $("appeal-email").value = state.userEmail || "";
+  $("appeal-reason").value = "";
+  $("appeal-type").value = "";
+  updateAppealCharCount();
+}
+
+function updateAppealCharCount() {
+  const count = $("appeal-reason").value.length;
+  $("appeal-char-count").textContent = `${count} / 2000`;
+}
+
+$("susp-appeal-btn").addEventListener("click", showAppealPage);
+$("susp-logout-btn").addEventListener("click", () => { setView("auth"); });
+$("appeal-cancel").addEventListener("click", () => { setView("suspension"); });
+$("appeal-reason").addEventListener("input", updateAppealCharCount);
+
+$("appeal-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("appeal-error").classList.add("hidden");
+
+  const email = $("appeal-email").value.trim().toLowerCase();
+  const type = $("appeal-type").value;
+  const reason = $("appeal-reason").value.trim();
+
+  if (!email || !type || reason.length < 50) {
+    return $("appeal-error").textContent = "All fields required (reason: min 50 characters)", void $("appeal-error").classList.remove("hidden");
+  }
+
+  try {
+    busy("Submitting appeal…");
+    const res = await api.post("/api/appeals", { appeal_type: type, email, reason });
+    $("appeal-form").style.display = "none";
+    $("appeal-success-panel").style.display = "block";
+    $("appeal-success-id").textContent = `Appeal ID: ${res.id || "submitted"}`;
+  } catch (err) {
+    $("appeal-error").textContent = err.message || "Failed to submit appeal";
+    $("appeal-error").classList.remove("hidden");
+  } finally {
+    unbusy();
+  }
+});
+
+$("appeal-back-btn").addEventListener("click", () => { setView("auth"); });
 
 $("unlock-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -240,6 +492,7 @@ $("unlock-form").addEventListener("submit", async (e) => {
 async function loadUser() {
   state.user = await api.get("/api/auth/me");
   $("user-email").textContent = state.user.email;
+  updateModeratorTab();
 }
 
 async function logout() {
@@ -727,6 +980,383 @@ async function loadSettings() {
   await loadLoginHistory();
 }
 
+async function loadModeration() {
+  try {
+    const [stats, appealsData, reports, users] = await Promise.all([
+      api.get("/api/mod/stats"),
+      api.get("/api/mod/appeals?status=pending&limit=1"),
+      api.get("/api/mod/reports?limit=100"),
+      api.get("/api/mod/users?limit=200"),
+    ]);
+
+    $("mod-total-users").textContent = stats.totalUsers;
+    $("mod-active-users").textContent = stats.activeUsers;
+    $("mod-suspended-users").textContent = stats.suspendedUsers;
+    $("mod-banned-users").textContent = stats.bannedUsers;
+    $("mod-total-messages").textContent = stats.totalMessages;
+    $("mod-total-reports").textContent = stats.totalReports;
+
+    const pendingAppealCount = appealsData.total;
+    $("mod-pending-appeals").textContent = pendingAppealCount;
+    const appealsBadge = $("mod-appeals-badge");
+    if (pendingAppealCount > 0) {
+      appealsBadge.textContent = pendingAppealCount > 99 ? "99+" : pendingAppealCount;
+      appealsBadge.style.display = "flex";
+    } else {
+      appealsBadge.style.display = "none";
+    }
+    const appealsCount = $("mod-appeals-count");
+    if (pendingAppealCount > 0) {
+      appealsCount.textContent = pendingAppealCount > 99 ? "99+" : pendingAppealCount;
+      appealsCount.style.display = "";
+    } else {
+      appealsCount.style.display = "none";
+    }
+
+    const reportsList = $("mod-reports-list");
+    const reportsSearchInput = $("mod-reports-search");
+
+    const renderReports = () => {
+    const searchTerm = reportsSearchInput.value.toLowerCase();
+    let filtered = reports.filter(r => {
+      const searchText = [
+        r.reason,
+        r.details || "",
+        r.reporterEmail || "",
+        r.reportedUserEmail || ""
+      ].join(" ").toLowerCase();
+      return searchText.includes(searchTerm);
+    });
+
+    reportsList.replaceChildren();
+    if (filtered.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      const p = document.createElement("p");
+      p.textContent = filtered.length !== reports.length ? "No matching reports." : "No recent reports.";
+      empty.appendChild(p);
+      reportsList.appendChild(empty);
+    } else {
+      filtered.forEach(r => {
+        const reportRow = document.createElement("div");
+        reportRow.className = "report-row";
+        reportRow.style.cssText = "padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.08);";
+
+        const line1 = document.createElement("div");
+        const reasonB = document.createElement("b");
+        reasonB.textContent = r.reason;
+        line1.appendChild(reasonB);
+        line1.appendChild(document.createTextNode(" · " + fmtTime(r.createdAt)));
+        reportRow.appendChild(line1);
+
+        const line2 = document.createElement("div");
+        line2.className = "muted small";
+        line2.textContent = "Reporter: " + (r.reporterEmail || "unknown") + " · Reported: " + (r.reportedUserEmail || "unknown");
+        reportRow.appendChild(line2);
+
+        const line3 = document.createElement("div");
+        line3.textContent = r.details || "No additional details.";
+        reportRow.appendChild(line3);
+
+        if (r.messageContent) {
+          const line3b = document.createElement("div");
+          line3b.style.cssText = "margin-top:8px;padding:8px;background:rgba(255,255,255,0.03);border-left:2px solid rgba(255,255,255,0.1);";
+          const contentLabel = document.createElement("div");
+          contentLabel.className = "muted small";
+          contentLabel.textContent = "Message content:";
+          line3b.appendChild(contentLabel);
+          const contentText = document.createElement("div");
+          contentText.textContent = r.messageContent.slice(0, 500) + (r.messageContent.length > 500 ? "…" : "");
+          contentText.style.cssText = "margin-top:4px;word-break:break-word;";
+          line3b.appendChild(contentText);
+          reportRow.appendChild(line3b);
+        }
+
+        const line4 = document.createElement("div");
+        line4.className = "muted small";
+        line4.textContent = "DM " + (r.messageId ? "id " + r.messageId : r.groupMessageId ? "group id " + r.groupMessageId : "user report");
+        reportRow.appendChild(line4);
+
+        reportsList.appendChild(reportRow);
+      });
+    }
+    };
+
+    renderReports();
+    reportsSearchInput.addEventListener("input", renderReports);
+
+    const searchInput = $("mod-user-search");
+    const filterSelect = $("mod-user-filter");
+    const usersList = $("mod-users-list");
+
+    const renderUsersList = () => {
+    const searchTerm = searchInput.value.toLowerCase();
+    const filterStatus = filterSelect.value;
+
+    let filtered = users.filter(u => {
+      const matchesSearch = u.email.toLowerCase().includes(searchTerm);
+      const matchesFilter = !filterStatus ||
+        (filterStatus === "moderator" ? u.role === "moderator" || u.role === "super_moderator" : u.status === filterStatus);
+      return matchesSearch && matchesFilter;
+    });
+
+    usersList.replaceChildren();
+
+    if (filtered.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      const p = document.createElement("p");
+      p.textContent = filtered.length !== users.length ? "No matching users." : "No user accounts.";
+      empty.appendChild(p);
+      usersList.appendChild(empty);
+    } else {
+      filtered.forEach(u => {
+        const sessionItem = document.createElement("div");
+        sessionItem.className = "session-item";
+        sessionItem.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;";
+
+        const leftDiv = document.createElement("div");
+        leftDiv.style.cssText = "min-width:0;";
+
+        const emailDiv = document.createElement("div");
+        const emailB = document.createElement("b");
+        emailB.textContent = u.email;
+        emailDiv.appendChild(emailB);
+        if (u.role === "moderator" || u.role === "super_moderator") {
+          const hint = document.createElement("span");
+          hint.className = "hint";
+          hint.textContent = u.role === "super_moderator" ? "(super moderator)" : "(moderator)";
+          hint.style.cssText = u.role === "super_moderator" ? "color:#ffa500;font-weight:bold;" : "";
+          emailDiv.appendChild(document.createTextNode(" "));
+          emailDiv.appendChild(hint);
+        }
+        leftDiv.appendChild(emailDiv);
+
+        const statusDiv = document.createElement("div");
+        statusDiv.className = "muted small";
+        statusDiv.textContent = "Status: " + u.status + " · Created " + fmtTime(u.createdAt) + " · Last login " + fmtTime(u.lastLoginAt);
+        leftDiv.appendChild(statusDiv);
+
+        sessionItem.appendChild(leftDiv);
+
+        const rightDiv = document.createElement("div");
+        rightDiv.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;";
+
+        if (u.status !== "suspended" && u.status !== "banned") {
+          const suspendBtn = document.createElement("button");
+          suspendBtn.className = "btn ghost";
+          suspendBtn.setAttribute("data-mod-action", "suspend");
+          suspendBtn.setAttribute("data-user-id", u.id);
+          suspendBtn.textContent = "Suspend";
+          rightDiv.appendChild(suspendBtn);
+
+          const banBtn = document.createElement("button");
+          banBtn.className = "btn ghost";
+          banBtn.setAttribute("data-mod-action", "ban");
+          banBtn.setAttribute("data-user-id", u.id);
+          banBtn.textContent = "Ban";
+          rightDiv.appendChild(banBtn);
+        }
+
+        if (u.status !== "active") {
+          const restoreBtn = document.createElement("button");
+          restoreBtn.className = "btn primary";
+          restoreBtn.setAttribute("data-mod-action", "restore");
+          restoreBtn.setAttribute("data-user-id", u.id);
+          restoreBtn.textContent = "Restore";
+          rightDiv.appendChild(restoreBtn);
+        }
+
+        sessionItem.appendChild(rightDiv);
+        usersList.appendChild(sessionItem);
+      });
+
+    }
+  };
+
+  renderUsersList();
+  searchInput.addEventListener("input", renderUsersList);
+  filterSelect.addEventListener("change", renderUsersList);
+
+  // Event delegation for mod actions (prevents listener accumulation)
+  usersList.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-mod-action]");
+    if (!btn) return;
+
+    try {
+      const action = btn.dataset.modAction;
+      const userId = Number(btn.dataset.userId);
+
+      let actionData = null;
+      if (action === "suspend") {
+        actionData = await suspensionDialog();
+        if (!actionData) return;
+      } else if (action === "ban") {
+        actionData = await actionDialog("Ban this account?");
+        if (!actionData) return;
+      } else if (action === "restore") {
+        actionData = await restoreDialog();
+        if (!actionData) return;
+      }
+
+      const payload = { action, ...(actionData && actionData.durationDays ? { duration_days: actionData.durationDays } : {}), ...(actionData && actionData.reason ? { reason: actionData.reason } : {}) };
+      await api.post(`/api/mod/users/${userId}/status`, payload);
+      const actionLabel = { suspend: "suspended", ban: "banned", restore: "restored" }[action];
+      toast(`Account ${actionLabel}`, "info");
+      loadModeration();
+    } catch (e) {
+      toast(`Error: ${e.message}`, "error");
+    }
+  });
+
+  const appeals = await api.get("/api/mod/appeals?status=pending&limit=50");
+  const appealsList = $("mod-appeals-list");
+  appealsList.replaceChildren();
+  if (appeals.entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    const p = document.createElement("p");
+    p.textContent = "No pending appeals.";
+    empty.appendChild(p);
+    appealsList.appendChild(empty);
+  } else {
+    appeals.entries.forEach(appeal => {
+      const row = document.createElement("div");
+      row.className = "report-row";
+      row.style.cssText = "padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.08);";
+
+      const line1 = document.createElement("div");
+      const userB = document.createElement("b");
+      userB.textContent = appeal.userEmail || "unknown";
+      line1.appendChild(userB);
+      line1.appendChild(document.createTextNode(" · " + fmtTime(appeal.createdAt)));
+      row.appendChild(line1);
+
+      const line2 = document.createElement("div");
+      line2.textContent = appeal.reason;
+      row.appendChild(line2);
+
+      const btnDiv = document.createElement("div");
+      btnDiv.style.cssText = "margin-top:8px;display:flex;gap:8px;";
+      const reviewBtn = document.createElement("button");
+      reviewBtn.className = "btn primary";
+      reviewBtn.setAttribute("data-appeal-id", appeal.id);
+      reviewBtn.textContent = "Review";
+      reviewBtn.addEventListener("click", async () => {
+        try {
+          $("appeal-reason-text").textContent = appeal.reason;
+          const decision = await new Promise((resolve) => {
+            const m = $("appeal-review-modal");
+            const decisionSelect = $("appeal-decision");
+            const responseText = $("appeal-response");
+            const submitBtn = $("appeal-submit");
+            const cancelBtn = $("appeal-cancel");
+
+            decisionSelect.value = "";
+            responseText.value = "";
+
+            const close = (v) => {
+              m.classList.add("hidden");
+              submitBtn.removeEventListener("click", onSubmit);
+              cancelBtn.removeEventListener("click", onCancel);
+              resolve(v);
+            };
+            const onSubmit = () => {
+              if (!decisionSelect.value) {
+                decisionSelect.focus();
+                return;
+              }
+              close({ action: decisionSelect.value, reason: responseText.value || null });
+            };
+            const onCancel = () => close(null);
+
+            submitBtn.addEventListener("click", onSubmit);
+            cancelBtn.addEventListener("click", onCancel);
+            m.classList.remove("hidden");
+            decisionSelect.focus();
+          });
+
+          if (!decision) return;
+
+          await api.post(`/api/mod/appeals/${appeal.id}`, { action: decision.action, reason: decision.reason });
+          toast("Appeal reviewed", "info");
+          loadModeration();
+        } catch (e) {
+          toast(`Error: ${e.message}`, "error");
+        }
+      });
+      btnDiv.appendChild(reviewBtn);
+      row.appendChild(btnDiv);
+
+      appealsList.appendChild(row);
+    });
+  }
+
+  const auditLog = await api.get("/api/mod/audit-log?limit=50");
+  const auditList = $("mod-audit-log");
+  auditList.replaceChildren();
+  if (auditLog.entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    const p = document.createElement("p");
+    p.textContent = "No recent actions.";
+    empty.appendChild(p);
+    auditList.appendChild(empty);
+  } else {
+    auditLog.entries.forEach(entry => {
+      const row = document.createElement("div");
+      row.className = "report-row";
+      row.style.cssText = "padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.08);";
+
+      const line1 = document.createElement("div");
+      const actionB = document.createElement("b");
+      actionB.textContent = entry.action;
+      line1.appendChild(actionB);
+      line1.appendChild(document.createTextNode(" · " + fmtTime(entry.createdAt)));
+      row.appendChild(line1);
+
+      const line2 = document.createElement("div");
+      line2.className = "muted small";
+      line2.textContent = "By: " + (entry.modUsername || "unknown") + " → Target: " + (entry.targetUsername || "unknown");
+      row.appendChild(line2);
+
+      if (entry.reason) {
+        const line3 = document.createElement("div");
+        line3.textContent = entry.reason;
+        row.appendChild(line3);
+      }
+
+      auditList.appendChild(row);
+    });
+  }
+} catch (e) {
+  const reportsList = $("mod-reports-list");
+  const usersList = $("mod-users-list");
+  
+  const errorEl1 = document.createElement("p");
+  errorEl1.className = "form-error";
+  errorEl1.textContent = e.message;
+  reportsList.replaceChildren(errorEl1);
+  
+  const errorEl2 = document.createElement("p");
+  errorEl2.className = "form-error";
+  errorEl2.textContent = e.message;
+  usersList.replaceChildren(errorEl2);
+
+  const appealsList = $("mod-appeals-list");
+  const errorEl3 = document.createElement("p");
+  errorEl3.className = "form-error";
+  errorEl3.textContent = e.message;
+  appealsList.replaceChildren(errorEl3);
+
+  const auditList = $("mod-audit-log");
+  const errorEl4 = document.createElement("p");
+  errorEl4.className = "form-error";
+  errorEl4.textContent = e.message;
+  auditList.replaceChildren(errorEl4);
+}
+}
+
 async function loadSessions() {
   const list = $("sessions-list");
   list.innerHTML = '<p class="muted small">Loading…</p>';
@@ -874,9 +1504,20 @@ $("delete-account-form").addEventListener("submit", async (e) => {
 
 // ─── Routing ───────────────────────────────────────────────────
 for (const t of $$("#main-tabs .tab")) t.addEventListener("click", () => setRoute(t.dataset.route));
+for (const t of $$("#mod-tabs .tab")) t.addEventListener("click", () => setModRoute(t.dataset.modRoute));
+$("mod-mode-btn").addEventListener("click", () => state.modMode ? exitModMode() : enterModMode());
 window.addEventListener("hashchange", () => {
-  const r = location.hash.slice(1);
-  if (["cipher","vault","messages","history","settings"].includes(r)) setRoute(r);
+  const h = location.hash.slice(1);
+  if (h.startsWith("mod/")) {
+    const sub = h.slice(4);
+    if (["dashboard","reports","users","appeals","audit"].includes(sub)) {
+      if (!state.modMode) enterModMode();
+      else setModRoute(sub);
+    }
+  } else if (["cipher","vault","messages","history","settings"].includes(h)) {
+    if (state.modMode) exitModMode();
+    setRoute(h);
+  }
 });
 
 // ─── Keyboard shortcuts ────────────────────────────────────────
@@ -1080,7 +1721,7 @@ async function openDmThread(peerId) {
   refreshMsgKeySource();
   renderThreads();
   renderGroups();
-  await loadDmMessages(peerId);
+  await loadDmMessages(peerId, true);
   setTimeout(() => msgEls.body.focus(), 50);
 }
 
@@ -1142,15 +1783,14 @@ async function openGroupThread(groupId) {
   msgEls.keyRow.classList.add("hidden"); // group key is fixed
   renderThreads();
   renderGroups();
-  await loadGroupMessages(groupId);
+  await loadGroupMessages(groupId, true);
   setTimeout(() => msgEls.body.focus(), 50);
 }
 
-async function loadDmMessages(peerId) {
+async function loadDmMessages(peerId, resetDecryption = false) {
   try {
     state.messages = await api.get(`/api/messages?peer=${peerId}&limit=200`);
-    // Reset decryption state for new thread
-    state.messagesDecrypted = false;
+    if (resetDecryption) state.messagesDecrypted = false;
     await renderDmMessages();
     for (const m of state.messages) {
       if (!m.fromMe && !m.readAt) {
@@ -1165,11 +1805,10 @@ async function loadDmMessages(peerId) {
   }
 }
 
-async function loadGroupMessages(groupId) {
+async function loadGroupMessages(groupId, resetDecryption = false) {
   try {
     state.messages = await api.get(`/api/groups/${groupId}/messages?limit=200`);
-    // Reset decryption state for new thread
-    state.messagesDecrypted = false;
+    if (resetDecryption) state.messagesDecrypted = false;
     await renderGroupMessages();
     try { await api.post(`/api/groups/${groupId}/read`); } catch {}
     const g = state.groups.find(x => x.id === groupId);
@@ -1706,14 +2345,35 @@ async function subscribeToPushNotifications() {
 }
 
 // ── Report modal ──
-let reportingMsgId = null, reportingSenderId = null;
-function showReportModal(msgId, senderId) {
+let reportingMsgId = null, reportingSenderId = null, reportingMsgContent = null;
+async function showReportModal(msgId, senderId) {
   reportingMsgId = msgId;
   reportingSenderId = senderId;
+  reportingMsgContent = null;
   $("report-reason").value = "";
   $("report-details").value = "";
   $("report-error").classList.add("hidden");
+  $("report-preview").style.display = "none";
   $("report-modal").classList.remove("hidden");
+
+  const msg = state.messages.find(x => x.id === msgId);
+  if (msg) {
+    try {
+      let decrypted;
+      if (state.activeThread.kind === "dm") {
+        decrypted = await tryDecryptDm(msg.ciphertext, state.activeThread.peerId);
+      } else {
+        decrypted = await decryptToken(msg.ciphertext, state.activeThread.key);
+      }
+      if (decrypted.ok) {
+        reportingMsgContent = decrypted.text;
+        $("report-preview-text").textContent = decrypted.text.slice(0, 200) + (decrypted.text.length > 200 ? "…" : "");
+        $("report-preview").style.display = "block";
+      }
+    } catch (err) {
+      // Preview failed, continue without it
+    }
+  }
   setTimeout(() => $("report-reason").focus(), 30);
 }
 $("report-close").addEventListener("click", () => $("report-modal").classList.add("hidden"));
@@ -1723,11 +2383,19 @@ $("report-form").addEventListener("submit", async (e) => {
   const reason = $("report-reason").value;
   if (!reason) return;
   try {
+    const ok = await confirmDialog({
+      title: "Submit this report?",
+      body: "The moderators will see the decrypted message and investigate this report.",
+      okText: "Submit report",
+    });
+    if (!ok) return;
+
     await api.post("/api/report", {
       messageId: reportingMsgId,
       reportedUserId: reportingSenderId,
       reason,
       details: $("report-details").value || undefined,
+      messageContent: reportingMsgContent,
     });
     $("report-modal").classList.add("hidden");
     toast("Report submitted. Thank you.", "info");
@@ -1817,6 +2485,7 @@ async function boot() {
     state.user = await api.get("/api/auth/me");
     $("user-email").textContent = state.user.email;
     $("unlock-email").textContent = state.user.email;
+    updateModeratorTab();
     setView("unlock");
     setTimeout(() => $("unlock-password").focus(), 60);
   } catch (err) {
