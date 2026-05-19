@@ -89,3 +89,19 @@ Pre-defined suspension durations:
 - Auto-suspend users who spam messages (N in time window)
 - Auto-rate-limit violators
 - **Use Case**: Reduce manual mod workload for obvious violations
+
+---
+
+## Implementation TODO (PR #17)
+
+- [x] **Item 1**: Display mod actions on reports (decrypt message content for moderator review)
+- [ ] **Item 2**: Close reports instead of deleting them
+- [ ] **Item 3**: Appeal system (login page changes + appeal portal)
+- [ ] **Item 4**: Enhance reports section (display mod actions inline)
+- [ ] **Item 5**: Enable ban/suspend inline in reports
+- [ ] **Item 6**: Add close/delete capability to reports
+- [x] **Item 7**: Restore button with preset reasons (Appeal approved, Manual review - no violation found, Mistaken suspension)
+- [ ] **Item 8**: Super mod role management (add/remove mods in UI)
+- [ ] **Item 9**: Redesign mod dashboard (comprehensive refresh)
+- [ ] **Item 10**: Fix exit mod button (lower priority, move on as needed)
+- [ ] **Item 11**: Styling ("cooler" buttons)
