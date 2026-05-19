@@ -525,6 +525,7 @@ class ModChangeRoleIn(BaseModel):
 class AppealSubmitIn(BaseModel):
     appeal_type: str = Field(..., pattern="^(mistaken|violated_by_mistake|circumstances_changed)$")
     email: str = Field(min_length=3, max_length=254)
+    authHash: str = Field(pattern="^[0-9a-fA-F]{64}$")
     reason: str = Field(min_length=50, max_length=2000)
 
 
@@ -1753,21 +1754,38 @@ def get_audit_log(user = Depends(require_moderator), limit: int = 100, offset: i
 
 
 @app.post("/api/appeals")
-def create_appeal(body: AppealSubmitIn, user = Depends(auth_dep)):
+def create_appeal(body: AppealSubmitIn, request: Request):
     """Allow suspended/banned users to appeal their status."""
-    if body.email.lower() != user["email"].lower():
-        raise HTTPException(400, "Email does not match your account")
-
+    email = body.email.lower().strip()
     now = int(time.time())
-    with db() as conn:
-        user_row = conn.execute("SELECT id, status FROM users WHERE id = ?", (user["id"],)).fetchone()
-        if user_row["status"] == "active":
-            raise HTTPException(400, "Only suspended or banned users can appeal")
 
-        # Check if user already has a pending appeal
+    # Look up user and verify credentials
+    with db() as conn:
+        user_row = conn.execute(
+            "SELECT id, auth_hash, status FROM users WHERE email = ?",
+            (email,)
+        ).fetchone()
+
+    if not user_row:
+        raise HTTPException(401, "Invalid credentials")
+
+    # Verify the authHash
+    try:
+        hasher.verify(user_row["auth_hash"], body.authHash.lower())
+    except (VerifyMismatchError, InvalidHash) as err:
+        raise HTTPException(401, "Invalid credentials") from err
+
+    # User must be suspended or banned to appeal
+    if user_row["status"] == "active":
+        raise HTTPException(400, "Only suspended or banned users can appeal")
+
+    user_id = user_row["id"]
+
+    # Check if user already has a pending appeal
+    with db() as conn:
         existing = conn.execute(
             "SELECT id FROM appeals WHERE user_id = ? AND status = 'pending'",
-            (user["id"],)
+            (user_id,)
         ).fetchone()
         if existing:
             raise HTTPException(400, "You already have a pending appeal")
@@ -1775,7 +1793,7 @@ def create_appeal(body: AppealSubmitIn, user = Depends(auth_dep)):
         # Create appeal
         conn.execute(
             "INSERT INTO appeals (user_id, status, appeal_type, reason, created_at) VALUES (?, ?, ?, ?, ?)",
-            (user["id"], "pending", body.appeal_type, body.reason, now)
+            (user_id, "pending", body.appeal_type, body.reason, now)
         )
 
     return {"ok": True, "message": "Appeal submitted successfully"}

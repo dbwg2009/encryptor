@@ -358,6 +358,7 @@ authForm.addEventListener("submit", async (e) => {
 
       if (loginRes.restricted) {
         state.userEmail = email;
+        state.authHash = authHash;
         state.loginRestriction = { type: loginRes.restrictionType, timeRemaining: loginRes.timeRemaining };
         showSuspensionScreen(loginRes.restrictionType, loginRes.timeRemaining);
         return;
@@ -446,7 +447,12 @@ $("appeal-form").addEventListener("submit", async (e) => {
 
   try {
     busy("Submitting appeal…");
-    const res = await api.post("/api/appeals", { appeal_type: type, email, reason });
+    const res = await api.post("/api/appeals", {
+      appeal_type: type,
+      email,
+      authHash: state.authHash,
+      reason
+    });
     $("appeal-form").style.display = "none";
     $("appeal-success-panel").style.display = "block";
     $("appeal-success-id").textContent = `Appeal ID: ${res.id || "submitted"}`;
