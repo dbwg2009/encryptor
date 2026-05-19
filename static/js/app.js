@@ -1010,10 +1010,13 @@ async function loadModeration() {
       if (action === "suspend") {
         actionData = await suspensionDialog();
         if (!actionData) return;
-      } else if (action === "ban" || action === "restore") {
-        const title = action === "ban" ? "Ban this account?" : "Restore this account?";
-        actionData = await actionDialog(title);
+      } else if (action === "ban") {
+        actionData = await actionDialog("Ban this account?");
         if (!actionData) return;
+      } else if (action === "restore") {
+        const reason = prompt("Reason for restoration (optional):", "");
+        if (reason === null) return;
+        actionData = { reason: reason || null };
       }
 
       const payload = { action, ...(actionData && actionData.durationDays ? { duration_days: actionData.durationDays } : {}), ...(actionData && actionData.reason ? { reason: actionData.reason } : {}) };
