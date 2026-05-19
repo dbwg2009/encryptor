@@ -1134,7 +1134,7 @@ async function loadModeration() {
 
       const line2 = document.createElement("div");
       line2.className = "muted small";
-      line2.textContent = "By: " + (entry.modUsername || "unknown") + " → Target: " + (entry.targetUsername || "unknown");
+      line2.textContent = "By: " + (entry.mod_email || "unknown") + " → Target: " + (entry.target_email || "unknown");
       row.appendChild(line2);
 
       if (entry.reason) {
